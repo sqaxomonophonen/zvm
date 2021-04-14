@@ -3,6 +3,8 @@
 
 #include "zvm.h"
 
+struct zvm zvmg;
+
 // stolen from nothings/stb/stretchy_buffer.h
 void* zvm__grow_impl(void* xs, int increment, int item_sz)
 {
@@ -17,4 +19,46 @@ void* zvm__grow_impl(void* xs, int increment, int item_sz)
 	} else {
 		assert(!"realloc() failed");
 	}
+}
+
+void zvm_init()
+{
+}
+
+void zvm_begin_program()
+{
+}
+
+void zvm_end_program(uint32_t main_module_id)
+{
+	zvmg.prg.main_module_id = main_module_id;
+}
+
+static inline struct zvm_program* prg()
+{
+	return &zvmg.prg;
+}
+
+int mpad(struct zvm_module* m)
+{
+	int pad0 = m->n_inputs + m->n_state;
+	int pad1 = m->n_outputs + m->n_state;
+	return pad0 > pad1 ? pad0 : pad1;
+}
+
+uint32_t zvm_begin_module(int n_inputs, int n_outputs, int n_state)
+{
+	int id = zvm_arrlen(ZVM_PRG->modules);
+	struct zvm_module m = {0};
+	m.n_inputs = n_inputs;
+	m.n_outputs = n_outputs;
+	m.n_state = n_state;
+	(void)zvm_arradd(m.code, mpad(&m));
+	zvm_arrpush(ZVM_PRG->modules, m);
+	return id;
+}
+
+uint32_t zvm_end_module()
+{
+	return zvm_arrlen(ZVM_PRG->modules) - 1;
 }
