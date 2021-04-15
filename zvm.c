@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <assert.h>
+#include <string.h>
 
 #include "zvm.h"
 
@@ -60,16 +61,79 @@ int zvm_begin_module(int n_inputs, int n_outputs)
 	return id;
 }
 
+static inline int n_io_bitset_words(struct zvm_module* mod)
+{
+	return (mod->n_inputs + 31) >> 5;
+}
+
+static uint32_t* get_io_bitset(struct zvm_module* mod, int output_index)
+{
+	assert(0 <= output_index && output_index < mod->n_outputs);
+	return &mod->code[mod->io_bitsets_index + output_index * n_io_bitset_words(mod)];
+}
+
+static inline int bs32_test(uint32_t* bs, int i)
+{
+	return (bs[i>>5] >> i) & 1;
+}
+
+static inline void bs32_set(uint32_t* bs, int i)
+{
+	bs[i>>5] |= 1 << (i&31);
+}
+
+static void trace_dependencies(uint32_t* io_bitset, uint32_t p, int unpack_index)
+{
+	struct zvm_module* mod = ZVM_MOD;
+	if (p < mod->n_inputs) {
+		bs32_set(io_bitset, p);
+		return;
+	}
+
+	uint32_t code = mod->code[p];
+
+	int op = code & ZVM_OP_MASK;
+	if (op == ZVM_OP(INSTANCE)) {
+		int module_id = code >> ZVM_OP_BITS;
+		zvm_assert(zvm__is_valid_module_id(module_id));
+		struct zvm_module* m2 = &ZVM_PRG->modules[module_id];
+		if (m2->n_outputs == 1 && unpack_index == -1) unpack_index = 0;
+		zvm_assert(0 <= unpack_index && unpack_index < m2->n_outputs && "expected valid unpack");
+		uint32_t* bs = get_io_bitset(m2, unpack_index);
+		for (int i = 0; i < m2->n_inputs; i++) {
+			if (bs32_test(bs, i)) {
+				trace_dependencies(io_bitset, mod->code[zvm__arg_index(p, i)], -1);
+			}
+		}
+	} else if (op == ZVM_OP(UNPACK)) {
+		zvm_assert(unpack_index == -1 && "unexpected unpack");
+		int index = code >> ZVM_OP_BITS;
+		trace_dependencies(io_bitset, mod->code[zvm__arg_index(p, 0)], index);
+	} else if (op == ZVM_OP(UNIT_DELAY)) {
+		zvm_assert(unpack_index == -1 && "unexpected unpack");
+		// unit delays have no dependencies
+	} else {
+		zvm_assert(unpack_index == -1 && "unexpected unpack");
+		int n_args = zvm__op_n_args(code);
+		for (int i = 0; i < n_args; i++) {
+			trace_dependencies(io_bitset, mod->code[zvm__arg_index(p, i)], -1);
+		}
+	}
+}
+
 int zvm_end_module()
 {
 	struct zvm_module* mod = ZVM_MOD;
 
-	// check that all outputs have been assigned
+	const int n_words = n_io_bitset_words(mod);
+	mod->io_bitsets_index = zvm_arrlen(mod->code);
 	for (int i = 0; i < mod->n_outputs; i++) {
-		zvm_assert(mod->code[i] != ZVM_PLACEHOLDER && "unassigned output");
+		uint32_t p = mod->code[i];
+		zvm_assert(p != ZVM_PLACEHOLDER && "unassigned output");
+		uint32_t* io_bitset = zvm_arradd(mod->code, n_words);
+		memset(io_bitset, 0, n_words*sizeof(*io_bitset));
+		trace_dependencies(io_bitset, p, -1);
 	}
-
-
 
 	return zvm_arrlen(ZVM_PRG->modules) - 1;
 }

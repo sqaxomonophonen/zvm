@@ -47,6 +47,7 @@ struct zvm_module {
 	// they're not, e.g. for platform semi-independent optimizations like
 	// "integer SIMD", or floating point stuff
 	uint32_t* code;
+	uint32_t io_bitsets_index;
 };
 
 struct zvm_program {
