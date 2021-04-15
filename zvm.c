@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "zvm.h"
 
@@ -133,6 +134,11 @@ int zvm_end_module()
 		uint32_t* io_bitset = zvm_arradd(mod->code, n_words);
 		memset(io_bitset, 0, n_words*sizeof(*io_bitset));
 		trace_dependencies(io_bitset, p, -1);
+		#if 0
+		printf("output %d depends on inputs:", i);
+		for (int j = 0; j < mod->n_inputs; j++) if (bs32_test(io_bitset, j)) printf(" %d", j);
+		printf("\n");
+		#endif
 	}
 
 	return zvm_arrlen(ZVM_PRG->modules) - 1;
