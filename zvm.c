@@ -53,12 +53,23 @@ int zvm_begin_module(int n_inputs, int n_outputs)
 	struct zvm_module m = {0};
 	m.n_inputs = n_inputs;
 	m.n_outputs = n_outputs;
-	(void)zvm_arradd(m.code, mpad(&m));
+	int pad = mpad(&m);
+	uint32_t* xs = zvm_arradd(m.code, pad);
+	for (int i = 0; i < pad; i++) xs[i] = ZVM_PLACEHOLDER;
 	zvm_arrpush(ZVM_PRG->modules, m);
 	return id;
 }
 
 int zvm_end_module()
 {
+	struct zvm_module* mod = ZVM_MOD;
+
+	// check that all outputs have been assigned
+	for (int i = 0; i < mod->n_outputs; i++) {
+		zvm_assert(mod->code[i] != ZVM_PLACEHOLDER && "unassigned output");
+	}
+
+
+
 	return zvm_arrlen(ZVM_PRG->modules) - 1;
 }

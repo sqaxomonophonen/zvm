@@ -102,10 +102,15 @@ static inline uint32_t zvm_op_nor(uint32_t x, uint32_t y)
 	return zvm_3x(ZVM_OP(NOR), x, y);
 }
 
+static inline int zvm__is_valid_module_id(int module_id)
+{
+	return 0 <= module_id && module_id < ZVM_MAX_OP_ARG && module_id < zvm_arrlen(ZVM_PRG->modules);
+}
+
 static inline uint32_t zvm_op_instance(int module_id)
 {
 	#if DEBUG
-	zvm_assert(0 <= module_id && module_id < ZVM_MAX_OP_ARG);
+	zvm_assert(zvm__is_valid_module_id(module_id));
 	#endif
 	// expects module->n_inputs zvm_arg()'s following this
 	return zvm_1x(ZVM_OP(INSTANCE) | (module_id<<ZVM_OP_BITS));
@@ -126,22 +131,28 @@ static inline uint32_t zvm_arg(uint32_t arg)
 	return zvm_1x(arg);
 }
 
-static inline int zvm__is_valid_arg_index(uint32_t x, int index)
+static inline int zvm__op_n_args(uint32_t code)
 {
-	if (index < 0) return 0;
-	uint32_t c = ZVM_MOD->code[x];
-	int op = c & ZVM_OP_MASK;
+	int op = code & ZVM_OP_MASK;
 	if (op == ZVM_OP(INSTANCE)) {
-		int module_id = c >> ZVM_OP_BITS;
+		int module_id = (code >> ZVM_OP_BITS);
+		#if DEBUG
+		zvm_assert(zvm__is_valid_module_id(module_id));
+		#endif
 		struct zvm_module* module = &ZVM_PRG->modules[module_id];
-		return index < module->n_inputs;
+		return module->n_inputs;
 	}
 	switch (op) {
-	#define ZOP(op,narg) case ZVM_OP(op): zvm_assert(narg >= 0); return index < narg;
+	#define ZOP(op,narg) case ZVM_OP(op): zvm_assert(narg >= 0); return narg;
 	ZVM_OPS
 	#undef ZOP
 	default: zvm_assert(!"unhandled op"); return 0;
 	}
+}
+
+static inline int zvm__is_valid_arg_index(uint32_t x, int index)
+{
+	return 0 <= index && index < zvm__op_n_args(ZVM_MOD->code[x]);
 }
 
 static inline int zvm__arg_index(uint32_t x, int index)
@@ -154,7 +165,7 @@ static inline void zvm_assign_arg(uint32_t x, int index, uint32_t y)
 	int i = zvm__arg_index(x, index);
 	#if DEBUG
 	zvm_assert(zvm__is_valid_arg_index(x, index));
-	zvm_assert(ZVM_MOD->code[i] == ZVM_PLACEHOLDER);
+	zvm_assert((ZVM_MOD->code[i] == ZVM_PLACEHOLDER) && "reassignment?");
 	#endif
 	ZVM_MOD->code[i] = y;
 }
