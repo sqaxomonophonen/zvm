@@ -5,11 +5,14 @@
 #define ZVM_OPS \
 	\
 	ZOP(NOR) \
+	ZOP(UNIT_DELAY) \
 	ZOP(INSTANCE) \
 	ZOP(UNPACK)
 
 
 #define ZVM_OP(op) ZVM_OP_##op
+
+#define ZVM_PLACEHOLDER (0xfffff420)
 
 enum zvm_ops {
 	ZVM_OP_NIL = 0,
@@ -34,7 +37,6 @@ void* zvm__grow_impl(void* xs, int increment, int item_sz);
 struct zvm_module {
 	int n_inputs;
 	int n_outputs;
-	int n_state;
 	// TODO I/O type signature? they're all bits to begin with, until
 	// they're not, e.g. for platform semi-independent optimizations like
 	// "integer SIMD", or floating point stuff
@@ -60,7 +62,7 @@ void zvm_init();
 void zvm_begin_program();
 void zvm_end_program(uint32_t main_module_id);
 
-uint32_t zvm_begin_module(int n_inputs, int n_outputs, int n_state);
+uint32_t zvm_begin_module(int n_inputs, int n_outputs);
 uint32_t zvm_end_module();
 
 static inline uint32_t zvm_1x(uint32_t x0)
@@ -100,20 +102,29 @@ static inline uint32_t zvm_op_instance(uint32_t module_id)
 	return zvm_2x(ZVM_OP(INSTANCE), module_id);
 }
 
-static inline void zvm_assign_output(int index, uint32_t x)
+static inline uint32_t zvm_op_unit_delay(uint32_t x)
 {
-	ZVM_MOD->code[ZVM_MOD->n_state + index] = x;
+	return zvm_2x(ZVM_OP(UNIT_DELAY), x);
 }
 
-static inline void zvm_assign_state(int index, uint32_t x)
+static inline void zvm_assign_output(int index, uint32_t x)
 {
 	ZVM_MOD->code[index] = x;
 }
 
-
 static inline uint32_t zvm_arg(uint32_t arg)
 {
 	return zvm_1x(arg);
+}
+
+static inline int zvm__arg_index(uint32_t x, int index)
+{
+	return x+1+index; // XXX not always +1; must lookup op at x to see where args are
+}
+
+static inline void zvm_assign_arg(uint32_t x, int index, uint32_t y)
+{
+	ZVM_MOD->code[x + zvm__arg_index(x, index)] = y;
 }
 
 static inline uint32_t zvm_op_unpack(uint32_t x, uint32_t index)
@@ -123,14 +134,8 @@ static inline uint32_t zvm_op_unpack(uint32_t x, uint32_t index)
 
 static inline uint32_t zvm_input(uint32_t index)
 {
-	return index + ZVM_MOD->n_state;
-}
-
-static inline uint32_t zvm_state(uint32_t index)
-{
 	return index;
 }
-
 
 #define ZVM_H
 #endif

@@ -41,18 +41,17 @@ static inline struct zvm_program* prg()
 
 int mpad(struct zvm_module* m)
 {
-	int pad0 = m->n_inputs + m->n_state;
-	int pad1 = m->n_outputs + m->n_state;
+	int pad0 = m->n_inputs;
+	int pad1 = m->n_outputs;
 	return pad0 > pad1 ? pad0 : pad1;
 }
 
-uint32_t zvm_begin_module(int n_inputs, int n_outputs, int n_state)
+uint32_t zvm_begin_module(int n_inputs, int n_outputs)
 {
 	int id = zvm_arrlen(ZVM_PRG->modules);
 	struct zvm_module m = {0};
 	m.n_inputs = n_inputs;
 	m.n_outputs = n_outputs;
-	m.n_state = n_state;
 	(void)zvm_arradd(m.code, mpad(&m));
 	zvm_arrpush(ZVM_PRG->modules, m);
 	return id;

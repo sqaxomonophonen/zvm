@@ -18,7 +18,7 @@ uint32_t module_id_ram64k;
 
 static uint32_t emit_and()
 {
-	zvm_begin_module(2, 1, 0);
+	zvm_begin_module(2, 1);
 	uint32_t x0 = zvm_input(0);
 	uint32_t x1 = zvm_input(1);
 	uint32_t y0 = zvm_op_nor(x0, x0);
@@ -30,7 +30,7 @@ static uint32_t emit_and()
 
 static uint32_t emit_or()
 {
-	zvm_begin_module(2, 1, 0);
+	zvm_begin_module(2, 1);
 	uint32_t x = zvm_op_nor(zvm_input(0), zvm_input(1));
 	uint32_t or = zvm_op_nor(x, x);
 	zvm_assign_output(0, or);
@@ -39,7 +39,7 @@ static uint32_t emit_or()
 
 static uint32_t emit_not()
 {
-	zvm_begin_module(1, 1, 0);
+	zvm_begin_module(1, 1);
 	uint32_t x0 = zvm_input(0);
 	uint32_t not = zvm_op_nor(x0, x0);
 	zvm_assign_output(0, not);
@@ -80,7 +80,7 @@ static uint32_t op_not(uint32_t x0)
 static uint32_t emit_decoder(int n_in)
 {
 	const int n_out = 1 << n_in;
-	zvm_begin_module(n_in, n_out, 0);
+	zvm_begin_module(n_in, n_out);
 	for (int i = 0; i < n_out; i++) {
 		uint32_t x = 0;
 		int m = 1;
@@ -96,18 +96,18 @@ static uint32_t emit_decoder(int n_in)
 
 static uint32_t emit_memory_bit()
 {
-	zvm_begin_module(2, 1, 1);
+	zvm_begin_module(2, 1);
 	uint32_t WE = zvm_input(0);
 	uint32_t IN = zvm_input(1);
-	uint32_t dly_out = zvm_state(0);
-	zvm_assign_state(0, op_or(op_and(op_not(WE), dly_out), op_and(WE, IN)));
-	zvm_assign_output(0, dly_out);
+	uint32_t dly = zvm_op_unit_delay(ZVM_PLACEHOLDER);
+	zvm_assign_output(0, dly);
+	zvm_assign_arg(dly, 0, op_or(op_and(op_not(WE), dly), op_and(WE, IN)));
 	return zvm_end_module();
 }
 
 static uint32_t emit_memory_byte()
 {
-	zvm_begin_module(10, 8, 0);
+	zvm_begin_module(10, 8);
 	uint32_t RE = zvm_input(0);
 	uint32_t WE = zvm_input(1);
 	for (int i = 0; i < 8; i++) {
@@ -123,7 +123,7 @@ static uint32_t emit_memory_byte()
 
 static uint32_t emit_ram16(int address_bus_size, uint32_t ram_module_id)
 {
-	zvm_begin_module(10+address_bus_size, 8, 0);
+	zvm_begin_module(10+address_bus_size, 8);
 	uint32_t RE = zvm_input(0);
 	uint32_t WE = zvm_input(1);
 	const int D = 2;
