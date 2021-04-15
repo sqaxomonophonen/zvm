@@ -137,7 +137,7 @@ static uint32_t emit_ram16(int address_bus_size, uint32_t ram_module_id)
 	uint32_t memarr[16];
 
 	for (int i = 0; i < 16; i++) {
-		uint32_t select = zvm_op_unpack(demux, i);
+		uint32_t select = zvm_op_unpack(i, demux);
 		uint32_t re = op_and(RE, select);
 		uint32_t we = op_and(WE, select);
 		memarr[i] = zvm_op_instance(ram_module_id);
@@ -150,7 +150,7 @@ static uint32_t emit_ram16(int address_bus_size, uint32_t ram_module_id)
 	for (int i = 0; i < 8; i++) {
 		uint32_t x = 0;
 		for (int j = 0; j < 16; j++) {
-			uint32_t o = zvm_op_unpack(memarr[j], i);
+			uint32_t o = zvm_op_unpack(i, memarr[j]);
 			x = (j == 0) ? (o) : (op_or(x, o));
 		}
 		zvm_assign_output(i, x);

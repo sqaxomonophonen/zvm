@@ -1,6 +1,6 @@
 OPT=-O2
 #OPT=-O0 -g
-CFLAGS=-std=c99 -Wall $(OPT)
+CFLAGS=-std=c99 -Wall $(OPT) -DDEBUG
 
 bin=t1zvm
 

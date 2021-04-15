@@ -1,22 +1,28 @@
 #ifndef ZVM_H
 
 #include <stdint.h>
+#include <assert.h>
 
 #define ZVM_OPS \
 	\
-	ZOP(NOR) \
-	ZOP(UNIT_DELAY) \
-	ZOP(INSTANCE) \
-	ZOP(UNPACK)
+	ZOP(NOR,2) \
+	ZOP(UNIT_DELAY,1) \
+	ZOP(INSTANCE,-1) \
+	ZOP(UNPACK,1)
 
 
 #define ZVM_OP(op) ZVM_OP_##op
 
 #define ZVM_PLACEHOLDER (0xfffff420)
+#define ZVM_OP_BITS (8)
+#define ZVM_OP_MASK ((1<<ZVM_OP_BITS )-1)
+#define ZVM_MAX_OP_ARG (1<<(32-ZVM_OP_BITS))
+
+#define zvm_assert assert
 
 enum zvm_ops {
 	ZVM_OP_NIL = 0,
-	#define ZOP(op) ZVM_OP(op),
+	#define ZOP(op,narg) ZVM_OP(op),
 	ZVM_OPS
 	#undef ZOP
 	ZVM_OP_N
@@ -62,8 +68,8 @@ void zvm_init();
 void zvm_begin_program();
 void zvm_end_program(uint32_t main_module_id);
 
-uint32_t zvm_begin_module(int n_inputs, int n_outputs);
-uint32_t zvm_end_module();
+int zvm_begin_module(int n_inputs, int n_outputs);
+int zvm_end_module();
 
 static inline uint32_t zvm_1x(uint32_t x0)
 {
@@ -96,10 +102,13 @@ static inline uint32_t zvm_op_nor(uint32_t x, uint32_t y)
 	return zvm_3x(ZVM_OP(NOR), x, y);
 }
 
-static inline uint32_t zvm_op_instance(uint32_t module_id)
+static inline uint32_t zvm_op_instance(int module_id)
 {
+	#if DEBUG
+	zvm_assert(0 <= module_id && module_id < ZVM_MAX_OP_ARG);
+	#endif
 	// expects module->n_inputs zvm_arg()'s following this
-	return zvm_2x(ZVM_OP(INSTANCE), module_id);
+	return zvm_1x(ZVM_OP(INSTANCE) | (module_id<<ZVM_OP_BITS));
 }
 
 static inline uint32_t zvm_op_unit_delay(uint32_t x)
@@ -117,19 +126,45 @@ static inline uint32_t zvm_arg(uint32_t arg)
 	return zvm_1x(arg);
 }
 
+static inline int zvm__is_valid_arg_index(uint32_t x, int index)
+{
+	if (index < 0) return 0;
+	uint32_t c = ZVM_MOD->code[x];
+	int op = c & ZVM_OP_MASK;
+	if (op == ZVM_OP(INSTANCE)) {
+		int module_id = c >> ZVM_OP_BITS;
+		struct zvm_module* module = &ZVM_PRG->modules[module_id];
+		return index < module->n_inputs;
+	}
+	switch (op) {
+	#define ZOP(op,narg) case ZVM_OP(op): zvm_assert(narg >= 0); return index < narg;
+	ZVM_OPS
+	#undef ZOP
+	default: zvm_assert(!"unhandled op"); return 0;
+	}
+}
+
 static inline int zvm__arg_index(uint32_t x, int index)
 {
-	return x+1+index; // XXX not always +1; must lookup op at x to see where args are
+	return x+1+index;
 }
 
 static inline void zvm_assign_arg(uint32_t x, int index, uint32_t y)
 {
-	ZVM_MOD->code[x + zvm__arg_index(x, index)] = y;
+	int i = zvm__arg_index(x, index);
+	#if DEBUG
+	zvm_assert(zvm__is_valid_arg_index(x, index));
+	zvm_assert(ZVM_MOD->code[i] == ZVM_PLACEHOLDER);
+	#endif
+	ZVM_MOD->code[i] = y;
 }
 
-static inline uint32_t zvm_op_unpack(uint32_t x, uint32_t index)
+static inline uint32_t zvm_op_unpack(int index, uint32_t x)
 {
-	return zvm_3x(ZVM_OP(UNPACK), x, index);
+	#if DEBUG
+	zvm_assert(0 <= index && index < ZVM_MAX_OP_ARG);
+	#endif
+	return zvm_2x(ZVM_OP(UNPACK) | (index<<ZVM_OP_BITS), x);
 }
 
 static inline uint32_t zvm_input(uint32_t index)

@@ -23,6 +23,7 @@ void* zvm__grow_impl(void* xs, int increment, int item_sz)
 
 void zvm_init()
 {
+	zvm_assert(ZVM_OP_N <= ZVM_OP_MASK);
 }
 
 void zvm_begin_program()
@@ -46,7 +47,7 @@ int mpad(struct zvm_module* m)
 	return pad0 > pad1 ? pad0 : pad1;
 }
 
-uint32_t zvm_begin_module(int n_inputs, int n_outputs)
+int zvm_begin_module(int n_inputs, int n_outputs)
 {
 	int id = zvm_arrlen(ZVM_PRG->modules);
 	struct zvm_module m = {0};
@@ -57,7 +58,7 @@ uint32_t zvm_begin_module(int n_inputs, int n_outputs)
 	return id;
 }
 
-uint32_t zvm_end_module()
+int zvm_end_module()
 {
 	return zvm_arrlen(ZVM_PRG->modules) - 1;
 }
