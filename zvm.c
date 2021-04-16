@@ -75,7 +75,7 @@ static uint32_t* get_io_bitset(struct zvm_module* mod, int output_index)
 
 static inline int bs32_test(uint32_t* bs, int i)
 {
-	return (bs[i>>5] >> i) & 1;
+	return (bs[i>>5] >> (i&31)) & 1;
 }
 
 static inline void bs32_set(uint32_t* bs, int i)
