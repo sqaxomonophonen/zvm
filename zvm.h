@@ -179,10 +179,5 @@ static inline uint32_t zvm_op_unpack(int index, uint32_t x)
 	return zvm_2x(ZVM_OP(UNPACK) | (index<<ZVM_OP_BITS), x);
 }
 
-static inline uint32_t zvm_input(uint32_t index)
-{
-	return index;
-}
-
 #define ZVM_H
 #endif
