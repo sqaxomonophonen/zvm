@@ -32,11 +32,6 @@ void zvm_begin_program()
 {
 }
 
-static inline struct zvm_program* prg()
-{
-	return &zvmg.prg;
-}
-
 int mpad(struct zvm_module* m)
 {
 	int pad0 = m->n_inputs;
