@@ -48,6 +48,8 @@ struct zvm_module {
 	// "integer SIMD", or floating point stuff
 	uint32_t* code;
 	uint32_t io_bitsets_index;
+	int n_bits;
+	int refcount;
 };
 
 struct zvm_program {
@@ -113,12 +115,16 @@ static inline uint32_t zvm_op_instance(int module_id)
 	#if DEBUG
 	zvm_assert(zvm__is_valid_module_id(module_id));
 	#endif
+	struct zvm_module* instance_module = &(ZVM_PRG->modules[module_id]);
+	ZVM_MOD->n_bits += instance_module->n_bits;
+	instance_module->refcount++;
 	// expects module->n_inputs zvm_arg()'s following this
 	return zvm_1x(ZVM_OP(INSTANCE) | (module_id<<ZVM_OP_BITS));
 }
 
 static inline uint32_t zvm_op_unit_delay(uint32_t x)
 {
+	ZVM_MOD->n_bits++;
 	return zvm_2x(ZVM_OP(UNIT_DELAY), x);
 }
 
