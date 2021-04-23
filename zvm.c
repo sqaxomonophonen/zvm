@@ -32,11 +32,6 @@ void zvm_begin_program()
 {
 }
 
-void zvm_end_program(uint32_t main_module_id)
-{
-	zvmg.prg.main_module_id = main_module_id;
-}
-
 static inline struct zvm_program* prg()
 {
 	return &zvmg.prg;
@@ -143,4 +138,15 @@ int zvm_end_module()
 	printf("bits: %d\n", mod->n_bits);
 
 	return zvm_arrlen(ZVM_PRG->modules) - 1;
+}
+
+static void serialize_module_rec(uint32_t module_id)
+{
+	struct zvm_module* mod = &ZVM_PRG->modules[module_id];
+}
+
+void zvm_end_program(uint32_t main_module_id)
+{
+	ZVM_PRG->main_module_id = main_module_id;
+	serialize_module_rec(main_module_id);
 }
