@@ -129,13 +129,19 @@ int zvm_end_module()
 		uint32_t* io_bitset = zvm_arradd(mod->code, n_words);
 		memset(io_bitset, 0, n_words*sizeof(*io_bitset));
 		trace_dependencies(io_bitset, p, -1);
-		#if 1
+		#ifdef VERBOSE_DEBUG
 		printf("output %d depends on inputs:", i);
 		for (int j = 0; j < mod->n_inputs; j++) if (bs32_test(io_bitset, j)) printf(" %d", j);
 		printf("\n");
 		#endif
 	}
+	// TODO maybe also trace state dependencies? instead of tracing the
+	// dependencies of an output, I'd trace the dependencies for unit delay
+	// inputs, and instance inputs that are part of the instance's state
+	// dependencies
+	#ifdef VERBOSE_DEBUG
 	printf("bits: %d\n", mod->n_bits);
+	#endif
 
 	return zvm_arrlen(ZVM_PRG->modules) - 1;
 }
