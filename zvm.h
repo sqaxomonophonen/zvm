@@ -13,7 +13,11 @@
 
 #define ZVM_OP(op) ZVM_OP_##op
 
-#define ZVM_PLACEHOLDER (0xfffff420)
+#define ZVM_SPECIAL      (0xfffff420)
+#define ZVM_PLACEHOLDER (ZVM_SPECIAL + 1)
+#define ZVM_ZERO        (ZVM_SPECIAL + 2)
+
+
 #define ZVM_OP_BITS (8)
 #define ZVM_OP_MASK ((1<<ZVM_OP_BITS )-1)
 #define ZVM_MAX_OP_ARG (1<<(32-ZVM_OP_BITS))
@@ -52,9 +56,21 @@ struct zvm_module {
 	int refcount;
 };
 
+struct zvm_function {
+	uint32_t module_id;
+	uint32_t start;
+	int n_args;
+	int n_retvals;
+	uint32_t* module_inputs_bs32;
+	uint32_t* module_outputs_bs32;
+};
+
 struct zvm_program {
 	struct zvm_module* modules;
+	struct zvm_function* functions;
 	int main_module_id;
+	uint32_t* bytecode;
+	uint32_t* scratch;
 };
 
 struct zvm {
