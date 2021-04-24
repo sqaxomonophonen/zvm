@@ -195,25 +195,108 @@ int zvm_end_module()
 /*
 TODO ops:
   OP0 arithmetic: CONST_ZERO, CONST_ONE
-  OP1 arithmetic: NOT
+  OP1 arithmetic: NOT, MOVE...
   OP2 arithmetic: NOR, AND, OR, ...
   SPECIAL: CALL, RETURN,...
 */
 
-static void emit_input(struct zvm_module* mod, uint32_t p)
+static void emit_mov(uint32_t dst, uint32_t src)
 {
-	// XXX TODO
+	// TODO
 }
 
-static void emit_code(struct zvm_module* mod, int output_reg, uint32_t p)
+static void emit_zero(uint32_t dst)
 {
+	// TODO
+}
+
+static void emit_read(uint32_t dst, uint32_t state_src)
+{
+	// TODO
+}
+
+static void emit_nor(uint32_t dst, uint32_t a, uint32_t b)
+{
+	// TODO
+}
+
+static uint32_t alloc_reg(struct zvm_function* fn)
+{
+	return -1; // XXX
+}
+
+static void emit_code(struct zvm_function* fn, uint32_t dst_reg, uint32_t p)
+{
+	struct zvm_module* mod = &ZVM_PRG->modules[fn->module_id];
 	if (p < mod->n_inputs) {
-		return emit_input(mod, p);
+		zvm_assert((fn->n_args <= dst_reg && dst_reg < fn->n_args+fn->n_retvals) && "only arg->retval mov expected here");
+		uint32_t src_reg = fn->input_arg_map[p];
+		zvm_assert(src_reg != -1);
+		emit_mov(dst_reg, src_reg);
+		return;
 	}
-	// XXX TODO
+
+	if (p == ZVM_ZERO) {
+		emit_zero(dst_reg);
+		return;
+	}
+
+	zvm_assert(p < ZVM_SPECIAL);
+
+	uint32_t code = mod->code[p];
+
+	uint32_t op = code & ZVM_OP_MASK;
+	if (op == ZVM_OP(INSTANCE)) {
+		// TODO assert one-output module? (otherwise we'd be in UNPACK)
+	} else if (op == ZVM_OP(UNPACK)) {
+		int index = code >> ZVM_OP_BITS;
+		uint32_t code2 = mod->code[zvm__arg_index(p, 0)];
+		uint32_t op2 = code2 & ZVM_OP_MASK;
+		zvm_assert(op2 == ZVM_OP(INSTANCE) && "non-instance unpack");
+		int mod2_id = code2 >> ZVM_OP_BITS;
+		struct zvm_module* mod2 = &ZVM_PRG->modules[mod2_id];
+		zvm_assert(index < mod2->n_outputs);
+
+		const int n_functions = zvm_arrlen(ZVM_PRG->functions);
+		for (int i = 0; i < n_functions; i++) {
+			struct zvm_function* fn = &ZVM_PRG->functions[i];
+			if (fn->module_id == mod2_id && bs32_test(fn->module_outputs_bs32, index)) {
+				// found a matching function... now what? XXX :)
+				break;
+			}
+		}
+
+		// XXX several trace paths could end here... meaning the CALL
+		// must already be executed, otherwise we cannot output code...
+		// so we'd have to output simply a register... or a move or
+		// something?
+
+
+	} else if (op == ZVM_OP(UNIT_DELAY)) {
+		int state_index = 0; // XXX how do I know this? requires enumeration of unit delays...
+		emit_read(dst_reg, state_index);
+	} else {
+
+		int n_args = zvm__op_n_args(code);
+		uint32_t args[2];
+		zvm_assert(n_args <= ZVM_ARRAY_LENGTH(args));
+		for (int i = 0; i < n_args; i++) {
+			args[i] = alloc_reg(fn);
+		}
+		for (int i = 0; i < n_args; i++) {
+			emit_code(fn, args[i], mod->code[zvm__arg_index(p, i)]);
+		}
+
+		if (op == ZVM_OP(NOR)) {
+			zvm_assert(n_args == 2);
+			emit_nor(dst_reg, args[0], args[1]);
+		} else {
+			zvm_assert(!"unhandled op");
+		}
+	}
 }
 
-static uint32_t emit_function(uint32_t module_id, uint32_t* output_bs32)
+static void emit_function(uint32_t module_id, uint32_t* output_bs32)
 {
 	struct zvm_module* mod = &ZVM_PRG->modules[module_id];
 
@@ -233,23 +316,35 @@ static uint32_t emit_function(uint32_t module_id, uint32_t* output_bs32)
 		bs32_union_inplace(mod->n_inputs, input_bs32, get_io_bitset(mod, i));
 	}
 
-	struct zvm_function fn = {0};
-	fn.module_id = module_id;
-	fn.start = zvm_arrlen(ZVM_PRG->bytecode);
-	fn.n_args = bs32_popcnt(mod->n_inputs, input_bs32);
-	fn.n_retvals = bs32_popcnt(mod->n_outputs, output_bs32);
-	fn.module_inputs_bs32 = input_bs32;
-	fn.module_outputs_bs32 = output_bs32;
-	zvm_arrpush(ZVM_PRG->functions, fn);
-
-	int output_reg = fn.n_args;
-	for (int i = 0; i < mod->n_outputs; i++) {
-		if (!bs32_test(output_bs32, i)) continue;
-		emit_code(mod, output_reg, mod->code[i]);
-		output_reg++;
+	uint32_t* input_arg_map = zvm_arradd(ZVM_PRG->scratch, mod->n_inputs);
+	{
+		int arg_index = 0;
+		for (int i = 0; i < mod->n_inputs; i++) {
+			if (bs32_test(input_bs32, i)) {
+				input_arg_map[i] = arg_index++;
+			} else {
+				input_arg_map[i] = -1;
+			}
+		}
 	}
 
-	return 0; // XXX
+	struct zvm_function* fn = zvm_arradd(ZVM_PRG->functions, 1);
+	memset(fn, 0, sizeof *fn);
+	fn->module_id = module_id;
+	fn->start = zvm_arrlen(ZVM_PRG->bytecode);
+	fn->n_args = bs32_popcnt(mod->n_inputs, input_bs32);
+	fn->n_retvals = bs32_popcnt(mod->n_outputs, output_bs32);
+	fn->module_inputs_bs32 = input_bs32;
+	fn->module_outputs_bs32 = output_bs32;
+	fn->input_arg_map = input_arg_map;
+
+	uint32_t dst_reg = fn->n_args;
+	for (int i = 0; i < mod->n_outputs; i++) {
+		if (!bs32_test(output_bs32, i)) continue;
+		emit_code(fn, dst_reg, mod->code[i]);
+		dst_reg++;
+	}
+	// XXX FIXME what about unit delay inputs?
 }
 
 void zvm_end_program(uint32_t main_module_id)

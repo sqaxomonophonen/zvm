@@ -22,6 +22,8 @@
 #define ZVM_OP_MASK ((1<<ZVM_OP_BITS )-1)
 #define ZVM_MAX_OP_ARG (1<<(32-ZVM_OP_BITS))
 
+#define ZVM_ARRAY_LENGTH(x) (sizeof(x)/sizeof(x[0]))
+
 #define zvm_assert assert
 
 enum zvm_ops {
@@ -63,6 +65,7 @@ struct zvm_function {
 	int n_retvals;
 	uint32_t* module_inputs_bs32;
 	uint32_t* module_outputs_bs32;
+	uint32_t* input_arg_map;
 };
 
 struct zvm_program {
