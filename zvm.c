@@ -351,6 +351,22 @@ void zvm_end_program(uint32_t main_module_id)
 {
 	ZVM_PRG->main_module_id = main_module_id;
 
+	/*
+	XXX proper approach: I need a forward traversal structure:
+	 - do drain->source recursion; insert each seen
+	   [code_index,output_index] pair in an array (i.e. the output_index
+	   for mod->code[code_index])
+	 - when done, qsort the list (ORDER BY code_index,output_index)
+	 - then compact the list (no duplicates)
+	now I can binary search that list.
+	 - I could then do drain->source recursion again, and increment a
+	   refcount for each node. when done it tells me how many receivers
+	   each node has.. and then finally I can insert the receivers
+	I can then begin using this structure to push forward from "known
+	values" and actually emit code.. and I suppose I can attach any data or
+	metadata or state to these nodes...
+	*/
+
 	const int n_outputs = ZVM_PRG->modules[main_module_id].n_outputs;
 	uint32_t* output_bs32 = zvm_arradd(ZVM_PRG->scratch, bs32_n_words(n_outputs));
 	bs32_fill(n_outputs, output_bs32);
