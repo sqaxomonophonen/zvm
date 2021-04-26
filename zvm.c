@@ -375,8 +375,8 @@ void zvm_end_program(uint32_t main_module_id)
 
 	 - if there are only split CALLs to choose between:
 	   - if A and B are split calls, and A provides more "known values" for
-	     B, but not the other way around, prefer to CALL A first (A can
-	     "help B, but not the other way around)
+	     B, but not the other way around, prefer to CALL A first ("A can
+	     help B, but not the other way around")
 	   - if a split CALL is already compiled, use it? :) (tautology; if we
 	     chose this particular split before, why not choose it again)
 	   - if an instanced module has refcount=1, prefer it? (prevents reuse
