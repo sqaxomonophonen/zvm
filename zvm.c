@@ -364,7 +364,27 @@ void zvm_end_program(uint32_t main_module_id)
 	   each node has.. and then finally I can insert the receivers
 	I can then begin using this structure to push forward from "known
 	values" and actually emit code.. and I suppose I can attach any data or
-	metadata or state to these nodes...
+	metadata or state to these nodes... When pushing forward, instances
+	will be encountered, and it's a good idea to avoid needless
+	instance-splitting, so push forward from "known values" but stop at
+	function calls... when no more pushes can be made without a CALL,
+	choose the appropriate CALL using a bunch of considerations:
+
+	 - "full calls" are preferred, i.e. instances that do not require
+	   splitting... these are good because they provide more "known values"
+
+	 - if there are only split CALLs to choose between:
+	   - if A and B are split calls, and A provides more "known values" for
+	     B, but not the other way around, prefer to CALL A first (A can
+	     "help B, but not the other way around)
+	   - if a split CALL is already compiled, use it? :) (tautology; if we
+	     chose this particular split before, why not choose it again)
+	   - if an instanced module has refcount=1, prefer it? (prevents reuse
+	     considerations; provides more "known values")
+	   - if a module is constructed like a "logic bank", i.e. with several
+	     independent submodules, then "full call"-like behavior may be used
+	     when I can provide all inputs for a submodule
+
 	*/
 
 	const int n_outputs = ZVM_PRG->modules[main_module_id].n_outputs;
