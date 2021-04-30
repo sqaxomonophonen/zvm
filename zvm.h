@@ -13,9 +13,22 @@
 
 #define ZVM_OP(op) ZVM_OP_##op
 
-#define ZVM_SPECIAL      (0xfffff420)
-#define ZVM_PLACEHOLDER (ZVM_SPECIAL + 1)
-#define ZVM_ZERO        (ZVM_SPECIAL + 2)
+
+#define ZVM_SPECIAL0           (0xf0000000)
+#define ZVM_SPECIALXY(x,y)     (ZVM_SPECIAL0 + (((x)&0xfff)<<16) + ((y)&0xffff))
+#define ZVM_IS_SPECIALX(v,x)   (((v)&0xffff0000) == ZVM_SPECIALXY(x,0))
+#define ZVM_IS_SPECIAL(v)      ((v) >= ZVM_SPECIAL0)
+#define ZVM_GET_SPECIALY(v)    ((v) & 0xffff)
+
+#define ZVM_X_TAG   (1)
+#define ZVM_X_CONST (2)
+#define ZVM_X_INPUT (3)
+
+#define ZVM_PLACEHOLDER      ZVM_SPECIALXY(ZVM_X_TAG,   1)
+#define ZVM_ZERO             ZVM_SPECIALXY(ZVM_X_CONST, 0)
+#define ZVM_ONE              ZVM_SPECIALXY(ZVM_X_CONST, 1)
+#define ZVM_INPUT(i)         ZVM_SPECIALXY(ZVM_X_INPUT, i)
+
 
 
 #define ZVM_OP_BITS (8)
@@ -52,8 +65,14 @@ struct zvm_module {
 	// TODO I/O type signature? they're all bits to begin with, until
 	// they're not, e.g. for platform semi-independent optimizations like
 	// "integer SIMD", or floating point stuff
-	uint32_t* code;
-	uint32_t io_bitsets_index;
+
+	uint32_t outputs_p;
+	uint32_t code_begin_p;
+	uint32_t code_end_p;
+	int n_nodes;
+	uint32_t nodes_p;
+	uint32_t input_bs32s_p;
+
 	int n_bits;
 	int refcount;
 };
@@ -72,8 +91,9 @@ struct zvm_program {
 	struct zvm_module* modules;
 	struct zvm_function* functions;
 	int main_module_id;
-	uint32_t* bytecode;
-	uint32_t* scratch;
+	//uint32_t* bytecode;
+	//uint32_t* scratch;
+	uint32_t* buf;
 };
 
 struct zvm {
@@ -95,28 +115,28 @@ int zvm_end_module();
 
 static inline uint32_t zvm_1x(uint32_t x0)
 {
-	int id = zvm_arrlen(ZVM_MOD->code);
-	zvm_arrpush(ZVM_MOD->code, x0);
-	return id;
+	uint32_t idx = zvm_arrlen(ZVM_PRG->buf);
+	zvm_arrpush(ZVM_PRG->buf, x0);
+	return idx;
 }
 
 static inline uint32_t zvm_2x(uint32_t x0, uint32_t x1)
 {
-	int id = zvm_arrlen(ZVM_MOD->code);
-	uint32_t* xs = zvm_arradd(ZVM_MOD->code, 2);
+	uint32_t idx = zvm_arrlen(ZVM_PRG->buf);
+	uint32_t* xs = zvm_arradd(ZVM_PRG->buf, 2);
 	xs[0] = x0;
 	xs[1] = x1;
-	return id;
+	return idx;
 }
 
 static inline uint32_t zvm_3x(uint32_t x0, uint32_t x1, uint32_t x2)
 {
-	int id = zvm_arrlen(ZVM_MOD->code);
-	uint32_t* xs = zvm_arradd(ZVM_MOD->code, 3);
+	uint32_t idx = zvm_arrlen(ZVM_PRG->buf);
+	uint32_t* xs = zvm_arradd(ZVM_PRG->buf, 3);
 	xs[0] = x0;
 	xs[1] = x1;
 	xs[2] = x2;
-	return id;
+	return idx;
 }
 
 static inline uint32_t zvm_op_nor(uint32_t x, uint32_t y)
@@ -149,7 +169,9 @@ static inline uint32_t zvm_op_unit_delay(uint32_t x)
 
 static inline void zvm_assign_output(int index, uint32_t x)
 {
-	ZVM_MOD->code[index] = x;
+	struct zvm_module* mod = ZVM_MOD;
+	zvm_assert(0 <= index && index < mod->n_outputs);
+	ZVM_PRG->buf[mod->outputs_p + index] = x;
 }
 
 static inline uint32_t zvm_arg(uint32_t arg)
@@ -178,12 +200,12 @@ static inline int zvm__op_n_args(uint32_t code)
 
 static inline int zvm__is_valid_arg_index(uint32_t x, int index)
 {
-	return 0 <= index && index < zvm__op_n_args(ZVM_MOD->code[x]);
+	return 0 <= index && index < zvm__op_n_args(ZVM_PRG->buf[x]);
 }
 
-static inline int zvm__arg_index(uint32_t x, int index)
+static inline int zvm__arg_index(uint32_t p, int index)
 {
-	return x+1+index;
+	return p+1+index;
 }
 
 static inline void zvm_assign_arg(uint32_t x, int index, uint32_t y)
@@ -191,9 +213,9 @@ static inline void zvm_assign_arg(uint32_t x, int index, uint32_t y)
 	int i = zvm__arg_index(x, index);
 	#if DEBUG
 	zvm_assert(zvm__is_valid_arg_index(x, index));
-	zvm_assert((ZVM_MOD->code[i] == ZVM_PLACEHOLDER) && "reassignment?");
+	zvm_assert((ZVM_PRG->buf[i] == ZVM_PLACEHOLDER) && "reassignment?");
 	#endif
-	ZVM_MOD->code[i] = y;
+	ZVM_PRG->buf[i] = y;
 }
 
 static inline uint32_t zvm_op_unpack(int index, uint32_t x)

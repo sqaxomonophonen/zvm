@@ -23,6 +23,11 @@ void* zvm__grow_impl(void* xs, int increment, int item_sz)
 	}
 }
 
+static uint32_t buftop()
+{
+	return zvm_arrlen(ZVM_PRG->buf);
+}
+
 void zvm_init()
 {
 	zvm_assert(ZVM_OP_N <= ZVM_OP_MASK);
@@ -33,22 +38,15 @@ void zvm_begin_program()
 {
 }
 
-int mpad(struct zvm_module* m)
-{
-	int pad0 = m->n_inputs;
-	int pad1 = m->n_outputs;
-	return pad0 > pad1 ? pad0 : pad1;
-}
-
 int zvm_begin_module(int n_inputs, int n_outputs)
 {
 	int id = zvm_arrlen(ZVM_PRG->modules);
 	struct zvm_module m = {0};
 	m.n_inputs = n_inputs;
 	m.n_outputs = n_outputs;
-	int pad = mpad(&m);
-	uint32_t* xs = zvm_arradd(m.code, pad);
-	for (int i = 0; i < pad; i++) xs[i] = ZVM_PLACEHOLDER;
+	m.outputs_p = buftop();
+	(void)zvm_arradd(ZVM_PRG->buf, n_outputs);
+	m.code_begin_p = buftop();
 	zvm_arrpush(ZVM_PRG->modules, m);
 	return id;
 }
@@ -94,13 +92,11 @@ static inline void bs32_fill(int n, uint32_t* bs)
 	*bs |= bs32_mask(n);
 }
 
-#if 0
 static inline void bs32_intersection_inplace(int n, uint32_t* dst, uint32_t* src)
 {
 	for (; n>32; dst++,src++,n-=32) *dst &= *src;
 	(*dst) &= *src | ~bs32_mask(n);
 }
-#endif
 
 
 static inline int bs32_n_words(int n_bits)
@@ -108,287 +104,249 @@ static inline int bs32_n_words(int n_bits)
 	return (n_bits + 31) >> 5;
 }
 
-static inline int n_io_bitset_words(struct zvm_module* mod)
+static void bs32_print(int n, uint32_t* bs)
+{
+	printf("[");
+	int first = 1;
+	for (int i = 0; i < n; i++) {
+		if (bs32_test(bs, i)) {
+			printf("%s%d", (first ? "" : " "), i);
+			first = 0;
+		}
+	}
+	printf("]");
+}
+
+static inline int mod_n_input_bs32_words(struct zvm_module* mod)
 {
 	return bs32_n_words(mod->n_inputs);
 }
 
-static uint32_t* get_io_bitset(struct zvm_module* mod, int output_index)
+static uint32_t* get_input_bs32(struct zvm_module* mod, int index)
 {
-	assert(0 <= output_index && output_index < mod->n_outputs);
-	return &mod->code[mod->io_bitsets_index + output_index * n_io_bitset_words(mod)];
+	return &ZVM_PRG->buf[mod->input_bs32s_p + index * mod_n_input_bs32_words(mod)];
 }
 
-static void trace_dependencies_rec(uint32_t* io_bitset, uint32_t p, int unpack_index)
+static uint32_t* get_state_input_dep_bs32(struct zvm_module* mod)
 {
-	if (p == ZVM_ZERO) return;
-	assert(p < ZVM_SPECIAL);
+	return get_input_bs32(mod, 0);
+}
 
-	struct zvm_module* mod = ZVM_MOD;
-	if (p < mod->n_inputs) {
-		bs32_set(io_bitset, p);
-		return;
-	}
+static uint32_t* get_output_input_dep_bs32(struct zvm_module* mod, int output_index)
+{
+	assert(0 <= output_index && output_index < mod->n_outputs);
+	return get_input_bs32(mod, 1+output_index);
+}
 
-	uint32_t code = mod->code[p];
-
+static int get_op_length(uint32_t p)
+{
+	uint32_t code = ZVM_PRG->buf[p];
 	int op = code & ZVM_OP_MASK;
 	if (op == ZVM_OP(INSTANCE)) {
 		int module_id = code >> ZVM_OP_BITS;
 		zvm_assert(zvm__is_valid_module_id(module_id));
-		struct zvm_module* m2 = &ZVM_PRG->modules[module_id];
-		if (m2->n_outputs == 1 && unpack_index == -1) unpack_index = 0;
-		zvm_assert(0 <= unpack_index && unpack_index < m2->n_outputs && "expected valid unpack");
-		uint32_t* bs = get_io_bitset(m2, unpack_index);
-		for (int i = 0; i < m2->n_inputs; i++) {
-			if (bs32_test(bs, i)) {
-				trace_dependencies_rec(io_bitset, mod->code[zvm__arg_index(p, i)], -1);
-			}
-		}
+		struct zvm_module* mod2 = &ZVM_PRG->modules[module_id];
+		return 1 + mod2->n_inputs;
 	} else if (op == ZVM_OP(UNPACK)) {
-		zvm_assert(unpack_index == -1 && "unexpected unpack");
-		int index = code >> ZVM_OP_BITS;
-		// XXX no recursion necessary here... and eliminating it would
-		// remove the need for unpack_index?
-		trace_dependencies_rec(io_bitset, mod->code[zvm__arg_index(p, 0)], index);
+		return 2;
 	} else if (op == ZVM_OP(UNIT_DELAY)) {
-		zvm_assert(unpack_index == -1 && "unexpected unpack");
-		// unit delays have no dependencies
+		return 2;
+	} else if (op == ZVM_OP(NOR)) {
+		// XXX should probably group this into 2in1out, 1in1out, etc...
+		return 3;
 	} else {
-		zvm_assert(unpack_index == -1 && "unexpected unpack");
-		int n_args = zvm__op_n_args(code);
-		for (int i = 0; i < n_args; i++) {
-			trace_dependencies_rec(io_bitset, mod->code[zvm__arg_index(p, i)], -1);
+		zvm_assert(!"unhandled op");
+		return 0;
+	}
+}
+
+
+static int get_op_n_outputs(uint32_t p)
+{
+	uint32_t code = ZVM_PRG->buf[p];
+	int op = code & ZVM_OP_MASK;
+	if (op == ZVM_OP(INSTANCE)) {
+		int module_id = code >> ZVM_OP_BITS;
+		zvm_assert(zvm__is_valid_module_id(module_id));
+		struct zvm_module* mod2 = &ZVM_PRG->modules[module_id];
+		return mod2->n_outputs;
+	} else if (op == ZVM_OP(UNPACK)) {
+		return 1;
+	} else if (op == ZVM_OP(UNIT_DELAY)) {
+		return 1;
+	} else if (op == ZVM_OP(NOR)) {
+		return 1;
+	} else {
+		zvm_assert(!"unhandled op");
+		return 0;
+	}
+}
+
+static int nodecmp(const void* va, const void* vb)
+{
+	const uint32_t* a = va;
+	const uint32_t* b = vb;
+	if (a[0] < b[0]) return -1;
+	if (a[0] > b[0]) return 1;
+	if (a[1] < b[1]) return -1;
+	if (a[1] > b[1]) return 1;
+	return 0;
+}
+
+static void build_node_table(struct zvm_module* mod)
+{
+	uint32_t* nodes = NULL;
+	uint32_t* np = NULL;
+	for (int pass = 0; pass < 2; pass++) {
+		int n_nodes_total = 0;
+
+		uint32_t p = mod->code_begin_p;
+		const uint32_t p_end = mod->code_end_p;
+		while (p < p_end) {
+			int n_nodes = get_op_n_outputs(p);
+
+			if (pass == 1) {
+				for (int i = 0; i < n_nodes; i++) {
+					*(np++) = p;
+					*(np++) = i;
+				}
+			}
+
+			n_nodes_total += n_nodes;
+			p += get_op_length(p);
+		}
+		zvm_assert(p == p_end);
+
+		if (pass == 0) {
+			mod->n_nodes = n_nodes_total;
+			mod->nodes_p = buftop();
+			np = nodes = zvm_arradd(ZVM_PRG->buf, 2*mod->n_nodes);
+		} else if (pass == 1) {
+			qsort(nodes, mod->n_nodes, 2*sizeof(*nodes), nodecmp);
 		}
 	}
+}
+
+static void trace_inputs_rec(uint32_t* input_bs32, uint32_t p)
+{
+	int unpack_index = -1;
+
+	for (;;) {
+		if (ZVM_IS_SPECIALX(p, ZVM_X_CONST)) {
+			zvm_assert(unpack_index == -1);
+			return;
+		}
+
+		if (ZVM_IS_SPECIALX(p, ZVM_X_INPUT)) {
+			zvm_assert(unpack_index == -1);
+			bs32_set(input_bs32, ZVM_GET_SPECIALY(p));
+			return;
+		}
+
+		assert(!ZVM_IS_SPECIAL(p));
+
+		uint32_t code = ZVM_PRG->buf[p];
+
+		int op = code & ZVM_OP_MASK;
+		if (op == ZVM_OP(INSTANCE)) {
+			int module_id = code >> ZVM_OP_BITS;
+			zvm_assert(zvm__is_valid_module_id(module_id));
+			struct zvm_module* mod = &ZVM_PRG->modules[module_id];
+			if (mod->n_outputs == 1 && unpack_index == -1) unpack_index = 0;
+			zvm_assert(0 <= unpack_index && unpack_index < mod->n_outputs && "expected valid unpack");
+			uint32_t* bs32 = get_output_input_dep_bs32(mod, unpack_index);
+			for (int i = 0; i < mod->n_inputs; i++) {
+				if (bs32_test(bs32, i)) {
+					trace_inputs_rec(input_bs32, ZVM_PRG->buf[zvm__arg_index(p, i)]);
+				}
+			}
+			return;
+		}
+
+		zvm_assert(unpack_index == -1 && "unexpected unpack");
+
+		if (op == ZVM_OP(UNPACK)) {
+			unpack_index = code >> ZVM_OP_BITS;
+			p = ZVM_PRG->buf[zvm__arg_index(p, 0)];
+			continue;
+		} else if (op == ZVM_OP(UNIT_DELAY)) {
+			// unit delays have no dependencies
+			return;
+		} else {
+			int n_args = zvm__op_n_args(code);
+			for (int i = 0; i < n_args; i++) {
+				trace_inputs_rec(input_bs32, ZVM_PRG->buf[zvm__arg_index(p, i)]);
+			}
+			return;
+		}
+	}
+}
+
+static void trace_state_deps(uint32_t* input_bs32, struct zvm_module* mod)
+{
+	uint32_t p = mod->code_begin_p;
+	const uint32_t p_end = mod->code_end_p;
+	while (p < p_end) {
+		uint32_t code = ZVM_PRG->buf[p];
+		int op = code & ZVM_OP_MASK;
+		if (op == ZVM_OP(UNIT_DELAY)) {
+			trace_inputs_rec(input_bs32, ZVM_PRG->buf[zvm__arg_index(p,0)]);
+		} else if (op == ZVM_OP(INSTANCE)) {
+			int module_id = code >> ZVM_OP_BITS;
+			zvm_assert(zvm__is_valid_module_id(module_id));
+			struct zvm_module* mod2 = &ZVM_PRG->modules[module_id];
+			uint32_t* ibs = get_state_input_dep_bs32(mod2);
+			int n_inputs = mod2->n_inputs;
+			for (int i = 0; i < n_inputs; i++) {
+				if (bs32_test(ibs, i)) {
+					trace_inputs_rec(input_bs32, ZVM_PRG->buf[zvm__arg_index(p,i)]);
+				}
+			}
+		}
+		p += get_op_length(p);
+	}
+	zvm_assert(p == p_end);
 }
 
 int zvm_end_module()
 {
 	struct zvm_module* mod = ZVM_MOD;
 
-	const int n_words = n_io_bitset_words(mod);
-	mod->io_bitsets_index = zvm_arrlen(mod->code);
+	mod->code_end_p = buftop();
+
+	build_node_table(mod);
+
+	{
+		const int n_words = mod_n_input_bs32_words(mod);
+		mod->input_bs32s_p = buftop();
+		const int n_input_bs32s = 1 + mod->n_inputs;
+		uint32_t* input_bs32s = zvm_arradd(ZVM_PRG->buf, n_input_bs32s * n_words);
+		memset(input_bs32s, 0, sizeof(*input_bs32s) * n_input_bs32s * n_words);
+	}
+
+	uint32_t* state_input_dep_bs32   = get_state_input_dep_bs32(mod);
+	trace_state_deps(state_input_dep_bs32, mod);
+	#ifdef VERBOSE_DEBUG
+	printf("state: "); bs32_print(mod->n_inputs, state_input_dep_bs32); printf("\n");
+	#endif
 	for (int i = 0; i < mod->n_outputs; i++) {
-		uint32_t p = mod->code[i];
-		zvm_assert(p != ZVM_PLACEHOLDER && "unassigned output");
-		uint32_t* io_bitset = zvm_arradd(mod->code, n_words);
-		memset(io_bitset, 0, n_words*sizeof(*io_bitset));
-		trace_dependencies_rec(io_bitset, p, -1);
+		uint32_t* output_input_dep_bs32 = get_output_input_dep_bs32(mod, i);
+		trace_inputs_rec(output_input_dep_bs32, ZVM_PRG->buf[mod->outputs_p + i]);
 		#ifdef VERBOSE_DEBUG
-		printf("output %d depends on inputs:", i);
-		for (int j = 0; j < mod->n_inputs; j++) if (bs32_test(io_bitset, j)) printf(" %d", j);
-		printf("\n");
+		printf("o[%d]: ", i); bs32_print(mod->n_inputs, output_input_dep_bs32); printf("\n");
 		#endif
 	}
-	// TODO maybe also trace state dependencies? instead of tracing the
-	// dependencies of an output, I'd trace the dependencies for unit delay
-	// inputs, and instance inputs that are part of the instance's state
-	// dependencies
-	#ifdef VERBOSE_DEBUG
-	printf("bits: %d\n", mod->n_bits);
-	#endif
 
 	return zvm_arrlen(ZVM_PRG->modules) - 1;
 }
 
-/*
-TODO ops:
-  OP0 arithmetic: CONST_ZERO, CONST_ONE
-  OP1 arithmetic: NOT, MOVE...
-  OP2 arithmetic: NOR, AND, OR, ...
-  SPECIAL: CALL, RETURN,...
-*/
-
-static void emit_mov(uint32_t dst, uint32_t src)
+static void emit_main_function(uint32_t main_module_id)
 {
-	// TODO
-}
-
-static void emit_zero(uint32_t dst)
-{
-	// TODO
-}
-
-static void emit_read(uint32_t dst, uint32_t state_src)
-{
-	// TODO
-}
-
-static void emit_nor(uint32_t dst, uint32_t a, uint32_t b)
-{
-	// TODO
-}
-
-static uint32_t alloc_reg(struct zvm_function* fn)
-{
-	return -1; // XXX
-}
-
-static void emit_code(struct zvm_function* fn, uint32_t dst_reg, uint32_t p)
-{
-	struct zvm_module* mod = &ZVM_PRG->modules[fn->module_id];
-	if (p < mod->n_inputs) {
-		zvm_assert((fn->n_args <= dst_reg && dst_reg < fn->n_args+fn->n_retvals) && "only arg->retval mov expected here");
-		uint32_t src_reg = fn->input_arg_map[p];
-		zvm_assert(src_reg != -1);
-		emit_mov(dst_reg, src_reg);
-		return;
-	}
-
-	if (p == ZVM_ZERO) {
-		emit_zero(dst_reg);
-		return;
-	}
-
-	zvm_assert(p < ZVM_SPECIAL);
-
-	uint32_t code = mod->code[p];
-
-	uint32_t op = code & ZVM_OP_MASK;
-	if (op == ZVM_OP(INSTANCE)) {
-		// TODO assert one-output module? (otherwise we'd be in UNPACK)
-	} else if (op == ZVM_OP(UNPACK)) {
-		int index = code >> ZVM_OP_BITS;
-		uint32_t code2 = mod->code[zvm__arg_index(p, 0)];
-		uint32_t op2 = code2 & ZVM_OP_MASK;
-		zvm_assert(op2 == ZVM_OP(INSTANCE) && "non-instance unpack");
-		int mod2_id = code2 >> ZVM_OP_BITS;
-		struct zvm_module* mod2 = &ZVM_PRG->modules[mod2_id];
-		zvm_assert(index < mod2->n_outputs);
-
-		const int n_functions = zvm_arrlen(ZVM_PRG->functions);
-		for (int i = 0; i < n_functions; i++) {
-			struct zvm_function* fn = &ZVM_PRG->functions[i];
-			if (fn->module_id == mod2_id && bs32_test(fn->module_outputs_bs32, index)) {
-				// found a matching function... now what? XXX :)
-				break;
-			}
-		}
-
-		// XXX several trace paths could end here... meaning the CALL
-		// must already be executed, otherwise we cannot output code...
-		// so we'd have to output simply a register... or a move or
-		// something?
-
-
-	} else if (op == ZVM_OP(UNIT_DELAY)) {
-		int state_index = 0; // XXX how do I know this? requires enumeration of unit delays...
-		emit_read(dst_reg, state_index);
-	} else {
-
-		int n_args = zvm__op_n_args(code);
-		uint32_t args[2];
-		zvm_assert(n_args <= ZVM_ARRAY_LENGTH(args));
-		for (int i = 0; i < n_args; i++) {
-			args[i] = alloc_reg(fn);
-		}
-		for (int i = 0; i < n_args; i++) {
-			emit_code(fn, args[i], mod->code[zvm__arg_index(p, i)]);
-		}
-
-		if (op == ZVM_OP(NOR)) {
-			zvm_assert(n_args == 2);
-			emit_nor(dst_reg, args[0], args[1]);
-		} else {
-			zvm_assert(!"unhandled op");
-		}
-	}
-}
-
-static void emit_function(uint32_t module_id, uint32_t* output_bs32)
-{
-	struct zvm_module* mod = &ZVM_PRG->modules[module_id];
-
-	#ifdef DEBUG
-	{
-		const int n_functions = zvm_arrlen(ZVM_PRG->functions);
-		for (int i = 0; i < n_functions; i++) {
-			struct zvm_function* fn = &ZVM_PRG->functions[i];
-			zvm_assert((fn->module_id != module_id || !bs32_equal(mod->n_outputs, fn->module_outputs_bs32, output_bs32)) && "duplicate function");
-		}
-	}
-	#endif
-
-	uint32_t* input_bs32 = zvm_arradd(ZVM_PRG->scratch, n_io_bitset_words(mod));
-	memset(input_bs32, 0, n_io_bitset_words(mod) * sizeof(*input_bs32));
-	for (int i = 0; i < mod->n_outputs; i++) {
-		bs32_union_inplace(mod->n_inputs, input_bs32, get_io_bitset(mod, i));
-	}
-
-	uint32_t* input_arg_map = zvm_arradd(ZVM_PRG->scratch, mod->n_inputs);
-	{
-		int arg_index = 0;
-		for (int i = 0; i < mod->n_inputs; i++) {
-			if (bs32_test(input_bs32, i)) {
-				input_arg_map[i] = arg_index++;
-			} else {
-				input_arg_map[i] = -1;
-			}
-		}
-	}
-
-	struct zvm_function* fn = zvm_arradd(ZVM_PRG->functions, 1);
-	memset(fn, 0, sizeof *fn);
-	fn->module_id = module_id;
-	fn->start = zvm_arrlen(ZVM_PRG->bytecode);
-	fn->n_args = bs32_popcnt(mod->n_inputs, input_bs32);
-	fn->n_retvals = bs32_popcnt(mod->n_outputs, output_bs32);
-	fn->module_inputs_bs32 = input_bs32;
-	fn->module_outputs_bs32 = output_bs32;
-	fn->input_arg_map = input_arg_map;
-
-	uint32_t dst_reg = fn->n_args;
-	for (int i = 0; i < mod->n_outputs; i++) {
-		if (!bs32_test(output_bs32, i)) continue;
-		emit_code(fn, dst_reg, mod->code[i]);
-		dst_reg++;
-	}
-	// XXX FIXME what about unit delay inputs?
 }
 
 void zvm_end_program(uint32_t main_module_id)
 {
 	ZVM_PRG->main_module_id = main_module_id;
 
-	/*
-	XXX proper approach: I need a forward traversal structure:
-	 - do drain->source recursion; insert each seen
-	   [code_index,output_index] pair in an array (i.e. the output_index
-	   for mod->code[code_index])
-	 - when done, qsort the list (ORDER BY code_index,output_index)
-	 - then compact the list (no duplicates)
-	now I can binary search that list.
-	 - I could then do drain->source recursion again, and increment a
-	   refcount for each node. when done it tells me how many receivers
-	   each node has.. and then finally I can insert the receivers
-	I can then begin using this structure to push forward from "known
-	values" and actually emit code.. and I suppose I can attach any data or
-	metadata or state to these nodes... When pushing forward, instances
-	will be encountered, and it's a good idea to avoid needless
-	instance-splitting, so push forward from "known values" but stop at
-	function calls... when no more pushes can be made without a CALL,
-	choose the appropriate CALL using a bunch of considerations:
-
-	 - "full calls" are preferred, i.e. instances that do not require
-	   splitting... these are good because they provide more "known values"
-
-	 - if there are only split CALLs to choose between:
-	   - if A and B are split calls, and A provides more "known values" for
-	     B, but not the other way around, prefer to CALL A first ("A can
-	     help B, but not the other way around")
-	   - if a split CALL is already compiled, use it? :) (tautology; if we
-	     chose this particular split before, why not choose it again)
-	   - if an instanced module has refcount=1, prefer it? (prevents reuse
-	     considerations; provides more "known values")
-	   - if a module is constructed like a "logic bank", i.e. with several
-	     independent submodules, then "full call"-like behavior may be used
-	     when I can provide all inputs for a submodule
-
-	*/
-
-	const int n_outputs = ZVM_PRG->modules[main_module_id].n_outputs;
-	uint32_t* output_bs32 = zvm_arradd(ZVM_PRG->scratch, bs32_n_words(n_outputs));
-	bs32_fill(n_outputs, output_bs32);
-	emit_function(main_module_id, output_bs32);
+	emit_main_function(main_module_id);
 }

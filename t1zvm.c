@@ -19,14 +19,14 @@ uint32_t module_id_ram64k;
 static uint32_t emit_and()
 {
 	zvm_begin_module(2, 1);
-	zvm_assign_output(0, zvm_op_nor(zvm_op_nor(0, 0), zvm_op_nor(1, 1)));
+	zvm_assign_output(0, zvm_op_nor(zvm_op_nor(ZVM_INPUT(0), ZVM_INPUT(0)), zvm_op_nor(ZVM_INPUT(1), ZVM_INPUT(1))));
 	return zvm_end_module();
 }
 
 static uint32_t emit_or()
 {
 	zvm_begin_module(2, 1);
-	uint32_t x = zvm_op_nor(0, 1);
+	uint32_t x = zvm_op_nor(ZVM_INPUT(0), ZVM_INPUT(1));
 	zvm_assign_output(0, zvm_op_nor(x, x));
 	return zvm_end_module();
 }
@@ -34,7 +34,7 @@ static uint32_t emit_or()
 static uint32_t emit_not()
 {
 	zvm_begin_module(1, 1);
-	zvm_assign_output(0, zvm_op_nor(0, 0));
+	zvm_assign_output(0, zvm_op_nor(ZVM_INPUT(0), ZVM_INPUT(0)));
 	return zvm_end_module();
 }
 
@@ -76,7 +76,7 @@ static uint32_t emit_decoder(int n_in)
 		uint32_t x = 0;
 		int m = 1;
 		for (int j = 0; j < n_in; j++, m<<=1) {
-			uint32_t y = i&m ? j : op_not(j);
+			uint32_t y = i&m ? ZVM_INPUT(j) : op_not(ZVM_INPUT(j));
 			x = (j == 0) ? (y) : (op_and(x, y));
 		}
 		zvm_assign_output(i, x);
@@ -87,8 +87,8 @@ static uint32_t emit_decoder(int n_in)
 static uint32_t emit_memory_bit()
 {
 	zvm_begin_module(2, 1);
-	const uint32_t WE = 0;
-	const uint32_t IN = 1;
+	const uint32_t WE = ZVM_INPUT(0);
+	const uint32_t IN = ZVM_INPUT(1);
 	uint32_t dly = zvm_op_unit_delay(ZVM_PLACEHOLDER);
 	zvm_assign_output(0, dly);
 	zvm_assign_arg(dly, 0, op_or(op_and(op_not(WE), dly), op_and(WE, IN)));
@@ -98,10 +98,10 @@ static uint32_t emit_memory_bit()
 static uint32_t emit_memory_byte()
 {
 	zvm_begin_module(10, 8);
-	const uint32_t RE = 0;
-	const uint32_t WE = 1;
+	const uint32_t RE = ZVM_INPUT(0);
+	const uint32_t WE = ZVM_INPUT(1);
 	for (int i = 0; i < 8; i++) {
-		uint32_t in = 2+i;
+		uint32_t in = ZVM_INPUT(2+i);
 		uint32_t bit = zvm_op_instance(module_id_memory_bit);
 		zvm_arg(WE);
 		zvm_arg(in);
@@ -114,10 +114,10 @@ static uint32_t emit_memory_byte()
 static uint32_t emit_ram16(int address_bus_size, uint32_t ram_module_id)
 {
 	zvm_begin_module(10+address_bus_size, 8);
-	const uint32_t RE = 0;
-	const uint32_t WE = 1;
-	const uint32_t D = 2;
-	const uint32_t A = D+8;
+	const uint32_t RE = ZVM_INPUT(0);
+	const uint32_t WE = ZVM_INPUT(1);
+	const uint32_t D =  ZVM_INPUT(2);
+	const uint32_t A =  ZVM_INPUT(2+8);
 	const int n_pass = address_bus_size - 4;
 	const uint32_t As = A + n_pass;
 
