@@ -76,7 +76,8 @@ static uint32_t emit_decoder(int n_in)
 		uint32_t x = 0;
 		int m = 1;
 		for (int j = 0; j < n_in; j++, m<<=1) {
-			uint32_t y = i&m ? ZVM_INPUT(j) : op_not(ZVM_INPUT(j));
+			uint32_t in = ZVM_INPUT(j);
+			uint32_t y = i&m ? in : op_not(in);
 			x = (j == 0) ? (y) : (op_and(x, y));
 		}
 		zvm_assign_output(i, x);

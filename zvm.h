@@ -71,6 +71,8 @@ struct zvm_module {
 	uint32_t code_end_p;
 	int n_nodes;
 	uint32_t nodes_p;
+	uint32_t node_bs32_p;
+	//uint32_t nodedata0_p;
 	uint32_t input_bs32s_p;
 
 	int n_bits;
