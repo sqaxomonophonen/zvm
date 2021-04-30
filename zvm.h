@@ -93,8 +93,6 @@ struct zvm_program {
 	struct zvm_module* modules;
 	struct zvm_function* functions;
 	int main_module_id;
-	//uint32_t* bytecode;
-	//uint32_t* scratch;
 	uint32_t* buf;
 };
 
@@ -189,8 +187,8 @@ static inline int zvm__op_n_args(uint32_t code)
 		#if DEBUG
 		zvm_assert(zvm__is_valid_module_id(module_id));
 		#endif
-		struct zvm_module* module = &ZVM_PRG->modules[module_id];
-		return module->n_inputs;
+		struct zvm_module* mod = &ZVM_PRG->modules[module_id];
+		return mod->n_inputs;
 	}
 	switch (op) {
 	#define ZOP(op,narg) case ZVM_OP(op): zvm_assert(narg >= 0); return narg;

@@ -91,14 +91,14 @@ static inline int bs32_popcnt(int n, uint32_t* bs)
 	return popcnt;
 }
 
-static inline void bs32_clear(int n, uint32_t* bs)
+static inline void bs32_fill(int n, uint32_t* bs, int v)
 {
-	memset(bs, 0, sizeof(*bs) * bs32_n_words(n));
+	memset(bs, v?~0:0, sizeof(*bs) * bs32_n_words(n));
 }
 
-static inline void bs32_fill(int n, uint32_t* bs)
+static inline void bs32_clear_all(int n, uint32_t* bs)
 {
-	memset(bs, ~0, sizeof(*bs) * bs32_n_words(n));
+	bs32_fill(n, bs, 0);
 }
 
 static inline void bs32_intersection_inplace(int n, uint32_t* dst, uint32_t* src)
@@ -144,24 +144,7 @@ static uint32_t* get_output_input_dep_bs32(struct zvm_module* mod, int output_in
 
 static int get_op_length(uint32_t p)
 {
-	uint32_t code = ZVM_PRG->buf[p];
-	int op = code & ZVM_OP_MASK;
-	if (op == ZVM_OP(INSTANCE)) {
-		int module_id = code >> ZVM_OP_BITS;
-		zvm_assert(zvm__is_valid_module_id(module_id));
-		struct zvm_module* mod2 = &ZVM_PRG->modules[module_id];
-		return 1 + mod2->n_inputs;
-	} else if (op == ZVM_OP(UNPACK)) {
-		return 2;
-	} else if (op == ZVM_OP(UNIT_DELAY)) {
-		return 2;
-	} else if (op == ZVM_OP(NOR)) {
-		// XXX should probably group this into 2in1out, 1in1out, etc...
-		return 3;
-	} else {
-		zvm_assert(!"unhandled op");
-		return 0;
-	}
+	return 1+zvm__op_n_args(ZVM_PRG->buf[p]);
 }
 
 static int get_op_n_outputs(uint32_t p)
@@ -281,7 +264,7 @@ uint32_t* get_node_bs32(struct zvm_module* mod)
 
 static void clear_node_visit_set(struct zvm_module* mod)
 {
-	bs32_clear(mod->n_nodes, get_node_bs32(mod));
+	bs32_clear_all(mod->n_nodes, get_node_bs32(mod));
 }
 
 static int visit_node(struct zvm_module* mod, uint32_t p, uint32_t output_index)
@@ -435,13 +418,13 @@ int zvm_end_module()
 	return zvm_arrlen(ZVM_PRG->modules) - 1;
 }
 
-static void emit_function(uint32_t module_id)
+static void emit_function(uint32_t module_id, uint32_t* request_output_bs32, int request_state)
 {
 }
 
 static void emit_main_function(uint32_t main_module_id)
 {
-	emit_function(main_module_id);
+	emit_function(main_module_id, NULL/*XXX*/, 1);
 }
 
 void zvm_end_program(uint32_t main_module_id)
