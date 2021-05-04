@@ -7,6 +7,7 @@
 
 struct zvm zvmg;
 
+
 // stolen from nothings/stb/stretchy_buffer.h
 void* zvm__grow_impl(void* xs, int increment, int item_sz)
 {
@@ -21,6 +22,11 @@ void* zvm__grow_impl(void* xs, int increment, int item_sz)
 	} else {
 		assert(!"realloc() failed");
 	}
+}
+
+static inline int u32cmp(uint32_t a, uint32_t b)
+{
+	return (a>b)-(b>a);
 }
 
 static uint32_t buftop()
@@ -107,6 +113,19 @@ static inline void bs32_intersection_inplace(int n, uint32_t* dst, uint32_t* src
 	(*dst) &= *src | ~bs32_mask(n);
 }
 
+static int bs32_cmp(int n, uint32_t* a, uint32_t* b)
+{
+	const int n_words = bs32_n_words(n);
+
+	const uint32_t mask = bs32_mask(n&31);
+	int c0 = u32cmp(a[n_words-1]&mask, b[n_words-1]&mask);
+	if (c0 != 0) return c0;
+	for (int i = n_words-2; i >= 0; i--) {
+		int c1 = u32cmp(a[i], b[i]);
+		if (c1 != 0) return c1;
+	}
+	return 0;
+}
 
 static void bs32_print(int n, uint32_t* bs)
 {
@@ -172,11 +191,9 @@ static int nodecmp(const void* va, const void* vb)
 {
 	const uint32_t* a = va;
 	const uint32_t* b = vb;
-	if (a[0] < b[0])  return -1;
-	if (a[0] > b[0])  return  1;
-	if (a[1] < b[1])  return -1;
-	if (a[1] > b[1])  return  1;
-	return 0;
+	int c0 = u32cmp(a[0], b[0]);
+	if (c0 != 0) return c0;
+	return u32cmp(a[1], b[1]);
 }
 
 static void build_node_table(struct zvm_module* mod)
@@ -416,6 +433,79 @@ int zvm_end_module()
 	}
 
 	return zvm_arrlen(ZVM_PRG->modules) - 1;
+}
+
+static int funkey_cmp(const void* va, const void* vb)
+{
+	const struct zvm_funkey* a = va;
+	const struct zvm_funkey* b = vb;
+
+	int c0 = u32cmp(a->module_id, b->module_id);
+	if (c0 != 0) return c0;
+
+	struct zvm_module* mod = &ZVM_PRG->modules[a->module_id];
+	const int n = 1 + mod->n_inputs;
+
+	if (a->full_drain_request_bs32_p != b->full_drain_request_bs32_p) {
+		int c1 = bs32_cmp(n, &ZVM_PRG->buf[a->full_drain_request_bs32_p], &ZVM_PRG->buf[b->full_drain_request_bs32_p]);
+		if (c1 != 0) return c1;
+	}
+
+	if (a->drain_request_bs32_p != b->drain_request_bs32_p) {
+		int c2 = bs32_cmp(n, &ZVM_PRG->buf[a->drain_request_bs32_p], &ZVM_PRG->buf[b->drain_request_bs32_p]);
+		if (c2 != 0) return c2;
+	}
+
+	return u32cmp(a->prev_function_id, b->prev_function_id);
+}
+
+#if 0
+static int funkeyval_cmp(const void* va, const void* vb)
+{
+	const struct zvm_funkeyval* a = va;
+	const struct zvm_funkeyval* b = vb;
+	return funkey_cmp(&a->key, &b->key);
+}
+#endif
+
+static int produce_funkey_function_id(struct zvm_funkey* key)
+{
+	int left = 0;
+	int n = zvm_arrlen(ZVM_PRG->funkeyvals);
+	int right = n;
+	while (left < right) {
+		int mid = (left+right) >> 1;
+		if (funkey_cmp(&ZVM_PRG->funkeyvals[mid].key, key) < 0) {
+			left = mid + 1;
+		} else {
+			right = mid;
+		}
+	}
+
+	if (left < n) {
+		struct zvm_funkeyval* val = &ZVM_PRG->funkeyvals[left];
+		if (funkey_cmp(&val->key, key) == 0) {
+			return val->function_id;
+		}
+	}
+
+	(void)zvm_arradd(ZVM_PRG->funkeyvals, 1);
+
+	struct zvm_funkeyval* val = &ZVM_PRG->funkeyvals[left];
+
+	int to_move = n - left;
+	if (to_move > 0) {
+		memmove(val+1, val, to_move*sizeof(*val));
+	}
+
+	val->key = *key;
+	val->function_id = zvm_arrlen(ZVM_PRG->functions);
+
+	struct zvm_function fn = {0};
+	fn.key = *key;
+	zvm_arrpush(ZVM_PRG->functions, fn);
+
+	return val->function_id;
 }
 
 static void emit_function(uint32_t module_id, uint32_t* request_output_bs32, int request_state)

@@ -79,21 +79,29 @@ struct zvm_module {
 	int refcount;
 };
 
-struct zvm_function {
+struct zvm_funkey {
 	uint32_t module_id;
-	uint32_t start;
-	int n_args;
-	int n_retvals;
-	uint32_t* module_inputs_bs32;
-	uint32_t* module_outputs_bs32;
-	uint32_t* input_arg_map;
+	uint32_t full_drain_request_bs32_p;
+	uint32_t drain_request_bs32_p;
+	uint32_t prev_function_id;
+};
+
+struct zvm_funkeyval {
+	struct zvm_funkey key;
+	uint32_t function_id;
+};
+
+struct zvm_function {
+	struct zvm_funkey key;
 };
 
 struct zvm_program {
 	struct zvm_module* modules;
-	struct zvm_function* functions;
 	int main_module_id;
 	uint32_t* buf;
+
+	struct zvm_funkeyval* funkeyvals;
+	struct zvm_function* functions;
 };
 
 struct zvm {
