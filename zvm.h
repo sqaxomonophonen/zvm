@@ -60,6 +60,8 @@ void* zvm__grow_impl(void* xs, int increment, int item_sz);
 #define zvm_arrpush(a,v)     (zvm__maybegrow(a,1), (a)[zvm__len(a)++] = (v))
 #define zvm_arrlen(a)        ((a) ? zvm__len(a) : 0)
 #define zvm_arradd(a,n)      (zvm__maybegrow(a,n), zvm__len(a)+=(n), &(a)[zvm__len(a)-(n)])
+#define zvm_arrsetlen(a,n)   (((n)>zvm__len(a)) ? zvm__maybegrow(a,((n)-zvm__len(a))) : zvm__len(a)=(n))
+
 
 struct zvm_module {
 	int n_inputs;
@@ -81,20 +83,20 @@ struct zvm_module {
 	int refcount;
 };
 
-struct zvm_funkey {
+struct zvm_fnkey {
 	uint32_t module_id;
 	uint32_t full_drain_request_bs32_p;
 	uint32_t drain_request_bs32_p;
 	uint32_t prev_function_id;
 };
 
-struct zvm_funkeyval {
-	struct zvm_funkey key;
+struct zvm_fnkeyval {
+	struct zvm_fnkey key;
 	uint32_t function_id;
 };
 
 struct zvm_function {
-	struct zvm_funkey key;
+	struct zvm_fnkey key;
 };
 
 struct zvm_program {
@@ -103,7 +105,7 @@ struct zvm_program {
 	uint32_t main_function_id;
 	uint32_t* buf;
 
-	struct zvm_funkeyval* funkeyvals;
+	struct zvm_fnkeyval* fnkeyvals;
 	struct zvm_function* functions;
 };
 

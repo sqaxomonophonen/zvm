@@ -34,6 +34,11 @@ static uint32_t buftop()
 	return zvm_arrlen(ZVM_PRG->buf);
 }
 
+static uint32_t* bufp(uint32_t p)
+{
+	return &ZVM_PRG->buf[p];
+}
+
 static inline int get_module_drain_request_sz(struct zvm_module* mod)
 {
 	const int n_state_bits = 1;
@@ -162,7 +167,7 @@ static inline int mod_n_input_bs32_words(struct zvm_module* mod)
 
 static uint32_t* get_input_bs32(struct zvm_module* mod, int index)
 {
-	return &ZVM_PRG->buf[mod->input_bs32s_p + index * mod_n_input_bs32_words(mod)];
+	return bufp(mod->input_bs32s_p + index * mod_n_input_bs32_words(mod));
 }
 
 static uint32_t* get_state_input_dep_bs32(struct zvm_module* mod)
@@ -178,12 +183,12 @@ static uint32_t* get_output_input_dep_bs32(struct zvm_module* mod, int output_in
 
 static int get_op_length(uint32_t p)
 {
-	return 1+zvm__op_n_args(ZVM_PRG->buf[p]);
+	return 1+zvm__op_n_args(*bufp(p));
 }
 
 static int get_op_n_outputs(uint32_t p)
 {
-	uint32_t code = ZVM_PRG->buf[p];
+	uint32_t code = *bufp(p);
 	int op = code & ZVM_OP_MASK;
 	if (op == ZVM_OP(INSTANCE)) {
 		int module_id = code >> ZVM_OP_BITS;
@@ -258,7 +263,7 @@ static void build_node_table(struct zvm_module* mod)
 #if 0
 static inline uint32_t* get_nodedata0(struct zvm_module* mod)
 {
-	return &ZVM_PRG->buf[mod->nodedata0_p];
+	return bufp(mod->nodedata0_p);
 }
 
 static void clear_nodedata0(struct zvm_module* mod)
@@ -269,7 +274,7 @@ static void clear_nodedata0(struct zvm_module* mod)
 
 static int get_node_index(struct zvm_module* mod, uint32_t p, uint32_t i)
 {
-	uint32_t* nodes = &ZVM_PRG->buf[mod->nodes_p];
+	uint32_t* nodes = bufp(mod->nodes_p);
 	const uint32_t k[] = {p,i};
 	int left = 0;
 	int right = mod->n_nodes - 1;
@@ -291,7 +296,7 @@ static int get_node_index(struct zvm_module* mod, uint32_t p, uint32_t i)
 
 uint32_t* get_node_bs32(struct zvm_module* mod)
 {
-	return &ZVM_PRG->buf[mod->node_bs32_p];
+	return bufp(mod->node_bs32_p);
 }
 
 static void clear_node_visit_set(struct zvm_module* mod)
@@ -337,7 +342,7 @@ static void trace_inputs_rec(struct zvm_module* mod, uint32_t* input_bs32, uint3
 			return;
 		}
 
-		uint32_t code = ZVM_PRG->buf[p];
+		uint32_t code = *bufp(p);
 
 		int op = code & ZVM_OP_MASK;
 		if (op == ZVM_OP(INSTANCE)) {
@@ -349,7 +354,7 @@ static void trace_inputs_rec(struct zvm_module* mod, uint32_t* input_bs32, uint3
 			uint32_t* bs32 = get_output_input_dep_bs32(mod2, unpack_index);
 			for (int i = 0; i < mod2->n_inputs; i++) {
 				if (bs32_test(bs32, i)) {
-					trace_inputs_rec(mod, input_bs32, ZVM_PRG->buf[zvm__arg_index(p, i)]);
+					trace_inputs_rec(mod, input_bs32, *bufp(zvm__arg_index(p, i)));
 				}
 			}
 			return;
@@ -359,7 +364,7 @@ static void trace_inputs_rec(struct zvm_module* mod, uint32_t* input_bs32, uint3
 
 		if (op == ZVM_OP(UNPACK)) {
 			unpack_index = code >> ZVM_OP_BITS;
-			p = ZVM_PRG->buf[zvm__arg_index(p, 0)];
+			p = *bufp(zvm__arg_index(p, 0));
 			continue;
 		} else if (op == ZVM_OP(UNIT_DELAY)) {
 			// unit delays have no dependencies
@@ -367,7 +372,7 @@ static void trace_inputs_rec(struct zvm_module* mod, uint32_t* input_bs32, uint3
 		} else {
 			int n_args = zvm__op_n_args(code);
 			for (int i = 0; i < n_args; i++) {
-				trace_inputs_rec(mod, input_bs32, ZVM_PRG->buf[zvm__arg_index(p, i)]);
+				trace_inputs_rec(mod, input_bs32, *bufp(zvm__arg_index(p, i)));
 			}
 			return;
 		}
@@ -387,10 +392,10 @@ static void trace_state_deps(uint32_t* input_bs32, struct zvm_module* mod)
 	uint32_t p = mod->code_begin_p;
 	const uint32_t p_end = mod->code_end_p;
 	while (p < p_end) {
-		uint32_t code = ZVM_PRG->buf[p];
+		uint32_t code = *bufp(p);
 		int op = code & ZVM_OP_MASK;
 		if (op == ZVM_OP(UNIT_DELAY)) {
-			trace_inputs_rec(mod, input_bs32, ZVM_PRG->buf[zvm__arg_index(p,0)]);
+			trace_inputs_rec(mod, input_bs32, *bufp(zvm__arg_index(p,0)));
 		} else if (op == ZVM_OP(INSTANCE)) {
 			int module_id = code >> ZVM_OP_BITS;
 			zvm_assert(zvm__is_valid_module_id(module_id));
@@ -399,7 +404,7 @@ static void trace_state_deps(uint32_t* input_bs32, struct zvm_module* mod)
 			int n_inputs = mod2->n_inputs;
 			for (int i = 0; i < n_inputs; i++) {
 				if (bs32_test(ibs, i)) {
-					trace_inputs_rec(mod, input_bs32, ZVM_PRG->buf[zvm__arg_index(p,i)]);
+					trace_inputs_rec(mod, input_bs32, *bufp(zvm__arg_index(p,i)));
 				}
 			}
 		}
@@ -441,7 +446,7 @@ int zvm_end_module()
 	// trace output input-dependencies
 	for (int i = 0; i < mod->n_outputs; i++) {
 		uint32_t* output_input_dep_bs32 = get_output_input_dep_bs32(mod, i);
-		trace_inputs(mod, output_input_dep_bs32, ZVM_PRG->buf[mod->outputs_p + i]);
+		trace_inputs(mod, output_input_dep_bs32, *bufp(mod->outputs_p + i));
 		#ifdef VERBOSE_DEBUG
 		printf("o[%d]: ", i); bs32_print(mod->n_inputs, output_input_dep_bs32); printf("\n");
 		#endif
@@ -450,10 +455,10 @@ int zvm_end_module()
 	return zvm_arrlen(ZVM_PRG->modules) - 1;
 }
 
-static int funkey_cmp(const void* va, const void* vb)
+static int fnkey_cmp(const void* va, const void* vb)
 {
-	const struct zvm_funkey* a = va;
-	const struct zvm_funkey* b = vb;
+	const struct zvm_fnkey* a = va;
+	const struct zvm_fnkey* b = vb;
 
 	int c0 = u32cmp(a->module_id, b->module_id);
 	if (c0 != 0) return c0;
@@ -462,12 +467,12 @@ static int funkey_cmp(const void* va, const void* vb)
 	const int n = 1 + mod->n_inputs;
 
 	if (a->full_drain_request_bs32_p != b->full_drain_request_bs32_p) {
-		int c1 = bs32_cmp(n, &ZVM_PRG->buf[a->full_drain_request_bs32_p], &ZVM_PRG->buf[b->full_drain_request_bs32_p]);
+		int c1 = bs32_cmp(n, bufp(a->full_drain_request_bs32_p), bufp(b->full_drain_request_bs32_p));
 		if (c1 != 0) return c1;
 	}
 
 	if (a->drain_request_bs32_p != b->drain_request_bs32_p) {
-		int c2 = bs32_cmp(n, &ZVM_PRG->buf[a->drain_request_bs32_p], &ZVM_PRG->buf[b->drain_request_bs32_p]);
+		int c2 = bs32_cmp(n, bufp(a->drain_request_bs32_p), bufp(b->drain_request_bs32_p));
 		if (c2 != 0) return c2;
 	}
 
@@ -475,22 +480,22 @@ static int funkey_cmp(const void* va, const void* vb)
 }
 
 #if 0
-static int funkeyval_cmp(const void* va, const void* vb)
+static int fnkeyval_cmp(const void* va, const void* vb)
 {
-	const struct zvm_funkeyval* a = va;
-	const struct zvm_funkeyval* b = vb;
-	return funkey_cmp(&a->key, &b->key);
+	const struct zvm_fnkeyval* a = va;
+	const struct zvm_fnkeyval* b = vb;
+	return fnkey_cmp(&a->key, &b->key);
 }
 #endif
 
-static int produce_funkey_function_id(struct zvm_funkey* key)
+static int produce_fnkey_function_id(struct zvm_fnkey* key)
 {
 	int left = 0;
-	int n = zvm_arrlen(ZVM_PRG->funkeyvals);
+	int n = zvm_arrlen(ZVM_PRG->fnkeyvals);
 	int right = n;
 	while (left < right) {
 		int mid = (left+right) >> 1;
-		if (funkey_cmp(&ZVM_PRG->funkeyvals[mid].key, key) < 0) {
+		if (fnkey_cmp(&ZVM_PRG->fnkeyvals[mid].key, key) < 0) {
 			left = mid + 1;
 		} else {
 			right = mid;
@@ -498,15 +503,15 @@ static int produce_funkey_function_id(struct zvm_funkey* key)
 	}
 
 	if (left < n) {
-		struct zvm_funkeyval* val = &ZVM_PRG->funkeyvals[left];
-		if (funkey_cmp(&val->key, key) == 0) {
+		struct zvm_fnkeyval* val = &ZVM_PRG->fnkeyvals[left];
+		if (fnkey_cmp(&val->key, key) == 0) {
 			return val->function_id;
 		}
 	}
 
-	(void)zvm_arradd(ZVM_PRG->funkeyvals, 1);
+	(void)zvm_arradd(ZVM_PRG->fnkeyvals, 1);
 
-	struct zvm_funkeyval* val = &ZVM_PRG->funkeyvals[left];
+	struct zvm_fnkeyval* val = &ZVM_PRG->fnkeyvals[left];
 
 	int to_move = n - left;
 	if (to_move > 0) {
@@ -526,23 +531,9 @@ static int produce_funkey_function_id(struct zvm_funkey* key)
 static void emit_function(uint32_t function_id)
 {
 	struct zvm_function* fn = &ZVM_PRG->functions[function_id];
+	struct zvm_module* mod = &ZVM_PRG->modules[fn->key.module_id];
 
-	// high-level approach:
-
-	//   - do a pass where all required funkey's are identified. if a
-	//     funkey is _new_ (larger function_id I guess?), call
-	//     emit_function() on it.
-
-	//   - do a second pass, this time actually emitting code, and no
-	//     recursion; the previous pass ensures that all funkey's are
-	//     ready-to-use and their code emitted
-
-	// the two-pass approach has the nice property that I can emit the code
-	// for an entire function in one go... i.e. I won't be emitting code
-	// for several functions at once (a one-pass approach would require
-	// "parallel emission")
-
-	// so how *do* I identify all required funkeys...? :)
+	clear_node_visit_set(mod);
 }
 
 void zvm_end_program(uint32_t main_module_id)
@@ -552,27 +543,15 @@ void zvm_end_program(uint32_t main_module_id)
 
 	const int drain_request_sz = get_module_drain_request_sz(mod);
 
-	struct zvm_funkey main_key = {
+	struct zvm_fnkey main_key = {
 		.module_id = main_module_id,
 		.full_drain_request_bs32_p = bs32_alloc(drain_request_sz),
 		.drain_request_bs32_p = bs32_alloc(drain_request_sz),
 		.prev_function_id = ZVM_NIL_ID,
 	};
 
-	bs32_fill(drain_request_sz, &ZVM_PRG->buf[main_key.full_drain_request_bs32_p], 1);
-	bs32_fill(drain_request_sz, &ZVM_PRG->buf[main_key.drain_request_bs32_p], 1);
+	bs32_fill(drain_request_sz, bufp(main_key.full_drain_request_bs32_p), 1);
+	bs32_fill(drain_request_sz, bufp(main_key.drain_request_bs32_p), 1);
 
-	emit_function(ZVM_PRG->main_function_id = produce_funkey_function_id(&main_key));
-
-	#if 0
-	int f0 = ZVM_PRG->main_function_id;
-	for (;;) {
-		int f1 = zvm_arrlen(ZVM_PRG->functions);
-		if (f0 == f1) break;
-		for (int i = f0; i < f1; i++) {
-			emit_function_execution_plan(i);
-		}
-		f0 = f1;
-	}
-	#endif
+	emit_function(ZVM_PRG->main_function_id = produce_fnkey_function_id(&main_key));
 }
