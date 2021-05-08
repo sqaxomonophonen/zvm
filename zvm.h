@@ -30,6 +30,8 @@
 #define ZVM_INPUT(i)         ZVM_SPECIALXY(ZVM_X_INPUT, i)
 
 
+#define ZVM_NIL_ID ((uint32_t)-1)
+
 
 #define ZVM_OP_BITS (8)
 #define ZVM_OP_MASK ((1<<ZVM_OP_BITS )-1)
@@ -97,7 +99,8 @@ struct zvm_function {
 
 struct zvm_program {
 	struct zvm_module* modules;
-	int main_module_id;
+	uint32_t main_module_id;
+	uint32_t main_function_id;
 	uint32_t* buf;
 
 	struct zvm_funkeyval* funkeyvals;

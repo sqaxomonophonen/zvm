@@ -34,6 +34,13 @@ static uint32_t buftop()
 	return zvm_arrlen(ZVM_PRG->buf);
 }
 
+static inline int get_module_drain_request_sz(struct zvm_module* mod)
+{
+	const int n_state_bits = 1;
+	const int n_output_bits = mod->n_outputs;
+	return n_state_bits + n_output_bits;
+}
+
 void zvm_init()
 {
 	zvm_assert(ZVM_OP_N <= ZVM_OP_MASK);
@@ -138,6 +145,14 @@ static void bs32_print(int n, uint32_t* bs)
 		}
 	}
 	printf("]");
+}
+
+static uint32_t bs32_alloc(int n)
+{
+	uint32_t p = buftop();
+	uint32_t* bs = zvm_arradd(ZVM_PRG->buf, bs32_n_words(n));
+	bs32_clear_all(n, bs);
+	return p;
 }
 
 static inline int mod_n_input_bs32_words(struct zvm_module* mod)
@@ -508,17 +523,56 @@ static int produce_funkey_function_id(struct zvm_funkey* key)
 	return val->function_id;
 }
 
-static void emit_function(uint32_t module_id, uint32_t* request_output_bs32, int request_state)
+static void emit_function(uint32_t function_id)
 {
-}
+	struct zvm_function* fn = &ZVM_PRG->functions[function_id];
 
-static void emit_main_function(uint32_t main_module_id)
-{
-	emit_function(main_module_id, NULL/*XXX*/, 1);
+	// high-level approach:
+
+	//   - do a pass where all required funkey's are identified. if a
+	//     funkey is _new_ (larger function_id I guess?), call
+	//     emit_function() on it.
+
+	//   - do a second pass, this time actually emitting code, and no
+	//     recursion; the previous pass ensures that all funkey's are
+	//     ready-to-use and their code emitted
+
+	// the two-pass approach has the nice property that I can emit the code
+	// for an entire function in one go... i.e. I won't be emitting code
+	// for several functions at once (a one-pass approach would require
+	// "parallel emission")
+
+	// so how *do* I identify all required funkeys...? :)
 }
 
 void zvm_end_program(uint32_t main_module_id)
 {
 	ZVM_PRG->main_module_id = main_module_id;
-	emit_main_function(main_module_id);
+	struct zvm_module* mod = &ZVM_PRG->modules[main_module_id];
+
+	const int drain_request_sz = get_module_drain_request_sz(mod);
+
+	struct zvm_funkey main_key = {
+		.module_id = main_module_id,
+		.full_drain_request_bs32_p = bs32_alloc(drain_request_sz),
+		.drain_request_bs32_p = bs32_alloc(drain_request_sz),
+		.prev_function_id = ZVM_NIL_ID,
+	};
+
+	bs32_fill(drain_request_sz, &ZVM_PRG->buf[main_key.full_drain_request_bs32_p], 1);
+	bs32_fill(drain_request_sz, &ZVM_PRG->buf[main_key.drain_request_bs32_p], 1);
+
+	emit_function(ZVM_PRG->main_function_id = produce_funkey_function_id(&main_key));
+
+	#if 0
+	int f0 = ZVM_PRG->main_function_id;
+	for (;;) {
+		int f1 = zvm_arrlen(ZVM_PRG->functions);
+		if (f0 == f1) break;
+		for (int i = f0; i < f1; i++) {
+			emit_function_execution_plan(i);
+		}
+		f0 = f1;
+	}
+	#endif
 }
