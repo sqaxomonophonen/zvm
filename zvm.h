@@ -31,6 +31,7 @@
 
 
 #define ZVM_NIL_ID ((uint32_t)-1)
+#define ZVM_NIL_P  ((uint32_t)-1)
 
 
 #define ZVM_OP_BITS (8)
@@ -60,7 +61,7 @@ void* zvm__grow_impl(void* xs, int increment, int item_sz);
 #define zvm_arrpush(a,v)     (zvm__maybegrow(a,1), (a)[zvm__len(a)++] = (v))
 #define zvm_arrlen(a)        ((a) ? zvm__len(a) : 0)
 #define zvm_arradd(a,n)      (zvm__maybegrow(a,n), zvm__len(a)+=(n), &(a)[zvm__len(a)-(n)])
-#define zvm_arrsetlen(a,n)   (((n)>zvm__len(a)) ? zvm__maybegrow(a,((n)-zvm__len(a))) : zvm__len(a)=(n))
+#define zvm_arrsetlen(a,n)   (((n)>zvm__len(a)) ? (void)zvm__maybegrow(a,((n)-zvm__len(a))) : (void)(zvm__len(a)=(n)))
 
 
 struct zvm_module {
@@ -73,10 +74,11 @@ struct zvm_module {
 	uint32_t outputs_p;
 	uint32_t code_begin_p;
 	uint32_t code_end_p;
-	int n_nodes;
-	uint32_t nodes_p;
-	uint32_t node_bs32_p;
-	//uint32_t nodedata0_p;
+
+	int n_node_outputs;
+	uint32_t node_outputs_p;
+	uint32_t node_output_bs32_p;
+
 	uint32_t input_bs32s_p;
 
 	int n_bits;
@@ -97,6 +99,10 @@ struct zvm_fnkeyval {
 
 struct zvm_function {
 	struct zvm_fnkey key;
+	int n_drains;
+	uint32_t drains_p;
+	int n_outputs;
+	uint32_t outputs_p;
 };
 
 struct zvm_program {

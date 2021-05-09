@@ -24,9 +24,16 @@ void* zvm__grow_impl(void* xs, int increment, int item_sz)
 	}
 }
 
-static inline int u32cmp(uint32_t a, uint32_t b)
+static inline int u32cmp(const uint32_t a, const uint32_t b)
 {
 	return (a>b)-(b>a);
+}
+
+static inline int u32paircmp(const uint32_t* a, const uint32_t* b)
+{
+	int c0 = u32cmp(a[0], b[0]);
+	if (c0 != 0) return c0;
+	return u32cmp(a[1], b[1]);
 }
 
 static uint32_t buftop()
@@ -74,6 +81,11 @@ static inline int bs32_n_words(int n_bits)
 	return (n_bits + 31) >> 5;
 }
 
+static inline int bs32_n_bytes(int n)
+{
+	return sizeof(uint32_t) * bs32_n_words(n);
+}
+
 static inline int bs32_test(uint32_t* bs, int i)
 {
 	return (bs[i>>5] >> (i&31)) & 1;
@@ -98,8 +110,18 @@ static inline int bs32_equal(int n, uint32_t* a, uint32_t* b)
 
 static inline void bs32_union_inplace(int n, uint32_t* dst, uint32_t* src)
 {
-	for (; n>32; dst++,src++,n-=32) *dst |= *src;
-	*dst |= *src & bs32_mask(n);
+	const int n_words = bs32_n_words(n);
+	for (int i = 0; i < n_words; i++) {
+		dst[i] |= src[i];
+	}
+}
+
+static inline void bs32_sub_inplace(int n, uint32_t* dst, uint32_t* src)
+{
+	const int n_words = bs32_n_words(n);
+	for (int i = 0; i < n_words; i++) {
+		dst[i] &= ~src[i];
+	}
 }
 
 static inline int bs32_popcnt(int n, uint32_t* bs)
@@ -109,14 +131,20 @@ static inline int bs32_popcnt(int n, uint32_t* bs)
 	return popcnt;
 }
 
+
 static inline void bs32_fill(int n, uint32_t* bs, int v)
 {
-	memset(bs, v?~0:0, sizeof(*bs) * bs32_n_words(n));
+	memset(bs, v?~0:0, bs32_n_bytes(n));
 }
 
 static inline void bs32_clear_all(int n, uint32_t* bs)
 {
 	bs32_fill(n, bs, 0);
+}
+
+static inline void bs32_copy(int n, uint32_t* dst, uint32_t* src)
+{
+	memcpy(dst, src, bs32_n_bytes(n));
 }
 
 static inline void bs32_intersection_inplace(int n, uint32_t* dst, uint32_t* src)
@@ -211,9 +239,7 @@ static int nodecmp(const void* va, const void* vb)
 {
 	const uint32_t* a = va;
 	const uint32_t* b = vb;
-	int c0 = u32cmp(a[0], b[0]);
-	if (c0 != 0) return c0;
-	return u32cmp(a[1], b[1]);
+	return u32paircmp(a, b);
 }
 
 static void build_node_table(struct zvm_module* mod)
@@ -226,58 +252,38 @@ static void build_node_table(struct zvm_module* mod)
 		uint32_t p = mod->code_begin_p;
 		const uint32_t p_end = mod->code_end_p;
 		while (p < p_end) {
-			int n_nodes = get_op_n_outputs(p);
+			int n_node_outputs = get_op_n_outputs(p);
 
 			if (pass == 1) {
-				for (int i = 0; i < n_nodes; i++) {
+				for (int i = 0; i < n_node_outputs; i++) {
 					//printf("->%d:%d\n",p,i);
 					*(np++) = p;
 					*(np++) = i;
 				}
 			}
 
-			n_nodes_total += n_nodes;
+			n_nodes_total += n_node_outputs;
 			p += get_op_length(p);
 		}
 		zvm_assert(p == p_end);
 
 		if (pass == 0) {
-			mod->n_nodes = n_nodes_total;
-			mod->nodes_p = buftop();
-			np = nodes = zvm_arradd(ZVM_PRG->buf, 2*mod->n_nodes);
+			mod->n_node_outputs = n_nodes_total;
+			mod->node_outputs_p = buftop();
+			np = nodes = zvm_arradd(ZVM_PRG->buf, 2*mod->n_node_outputs);
 		} else if (pass == 1) {
-			#if 0
 			// qsort not necessary; nodes are inserted in ascending
 			// order
-			qsort(nodes, mod->n_nodes, 2*sizeof(*nodes), nodecmp);
-			#endif
-			#if 0
-			printf("nodes (n=%d): ", mod->n_nodes);
-			for (int i = 0; i < mod->n_nodes; i++) printf(" %d:%d", nodes[i*2], nodes[i*2+1]);
-			printf("\n");
-			#endif
 		}
 	}
 }
 
-#if 0
-static inline uint32_t* get_nodedata0(struct zvm_module* mod)
-{
-	return bufp(mod->nodedata0_p);
-}
-
-static void clear_nodedata0(struct zvm_module* mod)
-{
-	memset(get_nodedata0(mod), 0, sizeof(ZVM_PRG->buf) * mod->n_nodes);
-}
-#endif
-
 static int get_node_index(struct zvm_module* mod, uint32_t p, uint32_t i)
 {
-	uint32_t* nodes = bufp(mod->nodes_p);
+	uint32_t* nodes = bufp(mod->node_outputs_p);
 	const uint32_t k[] = {p,i};
 	int left = 0;
-	int right = mod->n_nodes - 1;
+	int right = mod->n_node_outputs - 1;
 	while (left <= right) {
 		int mid = (left+right) >> 1;
 		int cmp = nodecmp(&nodes[mid*2], k);
@@ -294,20 +300,20 @@ static int get_node_index(struct zvm_module* mod, uint32_t p, uint32_t i)
 	zvm_assert(!"node not found");
 }
 
-uint32_t* get_node_bs32(struct zvm_module* mod)
+uint32_t* get_node_output_bs32(struct zvm_module* mod)
 {
-	return bufp(mod->node_bs32_p);
+	return bufp(mod->node_output_bs32_p);
 }
 
 static void clear_node_visit_set(struct zvm_module* mod)
 {
-	bs32_clear_all(mod->n_nodes, get_node_bs32(mod));
+	bs32_clear_all(mod->n_node_outputs, get_node_output_bs32(mod));
 }
 
 static int visit_node(struct zvm_module* mod, uint32_t p, uint32_t output_index)
 {
 	int node_index = get_node_index(mod, p, output_index);
-	uint32_t* node_bs32 = get_node_bs32(mod);
+	uint32_t* node_bs32 = get_node_output_bs32(mod);
 	if (bs32_test(node_bs32, node_index)) {
 		return 0;
 	} else {
@@ -316,7 +322,16 @@ static int visit_node(struct zvm_module* mod, uint32_t p, uint32_t output_index)
 	}
 }
 
-static void trace_inputs_rec(struct zvm_module* mod, uint32_t* input_bs32, uint32_t p)
+struct tracer {
+	struct zvm_module* mod;
+
+	void(*module_input_visitor)(struct tracer*, uint32_t p);
+	void(*instance_output_visitor)(struct tracer*, uint32_t p, int output_index);
+
+	void* usr;
+};
+
+static void trace(struct tracer* tr, uint32_t p)
 {
 	int unpack_index = -1;
 
@@ -328,17 +343,19 @@ static void trace_inputs_rec(struct zvm_module* mod, uint32_t* input_bs32, uint3
 
 		if (ZVM_IS_SPECIALX(p, ZVM_X_INPUT)) {
 			zvm_assert(unpack_index == -1);
-			bs32_set(input_bs32, ZVM_GET_SPECIALY(p));
+			if (tr->module_input_visitor != NULL) {
+				tr->module_input_visitor(tr, p);
+			}
 			return;
 		}
 
 		assert(!ZVM_IS_SPECIAL(p));
 
-		zvm_assert((mod->code_begin_p <= p && p < mod->code_end_p) && "p out of range");
+		zvm_assert((tr->mod->code_begin_p <= p && p < tr->mod->code_end_p) && "p out of range");
 
 		int output_index = unpack_index >= 0 ? unpack_index : 0;
 
-		if (!visit_node(mod, p, output_index)) {
+		if (!visit_node(tr->mod, p, output_index)) {
 			return;
 		}
 
@@ -352,9 +369,14 @@ static void trace_inputs_rec(struct zvm_module* mod, uint32_t* input_bs32, uint3
 			if (mod2->n_outputs == 1 && unpack_index == -1) unpack_index = 0;
 			zvm_assert(0 <= unpack_index && unpack_index < mod2->n_outputs && "expected valid unpack");
 			uint32_t* bs32 = get_output_input_dep_bs32(mod2, unpack_index);
+
+			if (tr->instance_output_visitor != NULL) {
+				tr->instance_output_visitor(tr, p, unpack_index);
+			}
+
 			for (int i = 0; i < mod2->n_inputs; i++) {
 				if (bs32_test(bs32, i)) {
-					trace_inputs_rec(mod, input_bs32, *bufp(zvm__arg_index(p, i)));
+					trace(tr, *bufp(zvm__arg_index(p, i)));
 				}
 			}
 			return;
@@ -372,11 +394,27 @@ static void trace_inputs_rec(struct zvm_module* mod, uint32_t* input_bs32, uint3
 		} else {
 			int n_args = zvm__op_n_args(code);
 			for (int i = 0; i < n_args; i++) {
-				trace_inputs_rec(mod, input_bs32, *bufp(zvm__arg_index(p, i)));
+				trace(tr, *bufp(zvm__arg_index(p, i)));
 			}
 			return;
 		}
 	}
+}
+
+static void trace_inputs_rec_module_input_visitor(struct tracer* tr, uint32_t p)
+{
+	uint32_t* input_bs32 = (uint32_t*)tr->usr;
+	bs32_set(input_bs32, ZVM_GET_SPECIALY(p));
+}
+
+static void trace_inputs_rec(struct zvm_module* mod, uint32_t* input_bs32, uint32_t p)
+{
+	struct tracer tr = {
+		.mod = mod,
+		.usr = input_bs32,
+		.module_input_visitor = trace_inputs_rec_module_input_visitor,
+	};
+	trace(&tr, p);
 }
 
 static void trace_inputs(struct zvm_module* mod, uint32_t* input_bs32, uint32_t p)
@@ -421,11 +459,8 @@ int zvm_end_module()
 
 	build_node_table(mod);
 
-	mod->node_bs32_p = buftop();
-	(void)zvm_arradd(ZVM_PRG->buf, bs32_n_words(mod->n_nodes));
-
-	//mod->nodedata0_p = buftop();
-	//(void)zvm_arradd(ZVM_PRG->buf, mod->n_nodes);
+	mod->node_output_bs32_p = buftop();
+	(void)zvm_arradd(ZVM_PRG->buf, bs32_n_words(mod->n_node_outputs));
 
 	// initialize input bitsets
 	{
@@ -479,6 +514,16 @@ static int fnkey_cmp(const void* va, const void* vb)
 	return u32cmp(a->prev_function_id, b->prev_function_id);
 }
 
+static inline int state_in_drain_request(uint32_t p)
+{
+	return bs32_test(bufp(p), 0);
+}
+
+static inline int output_in_drain_request(uint32_t p, int output_index)
+{
+	return bs32_test(bufp(p), 1+output_index);
+}
+
 #if 0
 static int fnkeyval_cmp(const void* va, const void* vb)
 {
@@ -528,12 +573,174 @@ static int produce_fnkey_function_id(struct zvm_fnkey* key)
 	return val->function_id;
 }
 
+
+// "DROUT" = "drain or output", which happens to share the same structure...
+enum {
+	DROUT_P = 0,
+	DROUT_INDEX,
+	DROUT_COUNTER,
+	DROUT_DECR_LIST_N,
+	DROUT_DECR_LIST_P,
+	DROUT_LEN,
+};
+
+#define DROUT_SZ (DROUT_LEN * sizeof(uint32_t))
+
+static int drout_compar(const void* va, const void* vb)
+{
+	const uint32_t* a = va;
+	const uint32_t* b = vb;
+	return u32paircmp(a,b);
+}
+
+static void push_drout(uint32_t p, int index)
+{
+	uint32_t* drain = zvm_arradd(ZVM_PRG->buf, DROUT_LEN);
+	drain[DROUT_P] = p;
+	drain[DROUT_INDEX] = index;
+	drain[DROUT_COUNTER] = 0;
+	drain[DROUT_DECR_LIST_N] = 0;
+	drain[DROUT_DECR_LIST_P] = 0;
+}
+
+static void add_drain_instance_output_visitor(struct tracer* tr, uint32_t p, int output_index)
+{
+	push_drout(p, output_index);
+}
+
+static void add_drain(struct zvm_function* fn, uint32_t p, int index)
+{
+	push_drout(p, index);
+
+	struct tracer tr = {
+		.mod = &ZVM_PRG->modules[fn->key.module_id],
+		.instance_output_visitor = add_drain_instance_output_visitor
+	};
+	uint32_t pp = (p == ZVM_NIL_P)
+		? bufp(tr.mod->outputs_p)[index]
+		: *bufp(zvm__arg_index(p, index));
+	trace(&tr, pp);
+}
+
 static void emit_function(uint32_t function_id)
 {
 	struct zvm_function* fn = &ZVM_PRG->functions[function_id];
-	struct zvm_module* mod = &ZVM_PRG->modules[fn->key.module_id];
+	struct zvm_fnkey* fnkey = &fn->key;
+	struct zvm_module* mod = &ZVM_PRG->modules[fnkey->module_id];
+
+	// calculate future drain request set, which is the full drain request
+	// minus the chain of drain requests
+	const int drain_request_sz = get_module_drain_request_sz(mod);
+	uint32_t future_drain_request_p = bs32_alloc(drain_request_sz);
+	bs32_copy(drain_request_sz, bufp(future_drain_request_p), bufp(fnkey->full_drain_request_bs32_p));
+	{
+		struct zvm_fnkey* fk = fnkey;
+		for (;;) {
+			bs32_sub_inplace(drain_request_sz, bufp(future_drain_request_p), bufp(fk->drain_request_bs32_p));
+			if (fk->prev_function_id == ZVM_NIL_ID) {
+				break;
+			}
+			fk = &ZVM_PRG->functions[fk->prev_function_id].key;
+		}
+	}
 
 	clear_node_visit_set(mod);
+
+	// find drains ...
+	{
+		fn->n_drains = 0;
+		fn->drains_p = buftop();
+
+		for (int output_index = 0; output_index < mod->n_outputs; output_index++) {
+			if (!output_in_drain_request(fnkey->drain_request_bs32_p, output_index)) {
+				continue;
+			}
+			add_drain(fn, ZVM_NIL_P, output_index);
+		}
+
+		if (state_in_drain_request(fn->key.drain_request_bs32_p)) {
+			uint32_t p = mod->code_begin_p;
+			const uint32_t p_end = mod->code_end_p;
+			while (p < p_end) {
+				uint32_t code = *bufp(p);
+				int op = code & ZVM_OP_MASK;
+				if (op == ZVM_OP(UNIT_DELAY)) {
+					add_drain(fn, p, 0);
+				} else if (op == ZVM_OP(INSTANCE)) {
+					int module_id = code >> ZVM_OP_BITS;
+					zvm_assert(zvm__is_valid_module_id(module_id));
+					struct zvm_module* mod2 = &ZVM_PRG->modules[module_id];
+					int n_inputs = mod2->n_inputs;
+					for (int i = 0; i < n_inputs; i++) {
+						add_drain(fn, p, i);
+					}
+				}
+				p += get_op_length(p);
+			}
+			zvm_assert(p == p_end);
+		}
+
+		// sort and compact drain array by removing duplicates
+
+		const int n_drains_with_dupes = (buftop() - fn->drains_p) / DROUT_LEN;
+		qsort(
+			bufp(fn->drains_p),
+			n_drains_with_dupes,
+			DROUT_SZ,
+			drout_compar);
+
+		uint32_t p_read = fn->drains_p;
+		uint32_t p_write = fn->drains_p;
+		uint32_t p_end = buftop();
+
+		while (p_read < p_end) {
+
+			if (p_read != p_write) {
+				memcpy(bufp(p_write), bufp(p_read), DROUT_SZ);
+			}
+
+			uint32_t p0 = p_read;
+			do {
+				p_read += DROUT_LEN;
+			} while (p_read < p_end && drout_compar(bufp(p0), bufp(p_read)) == 0);
+
+			p_write += DROUT_LEN;
+		}
+		zvm_assert(p_read == p_end);
+
+		fn->n_drains = (p_write - fn->drains_p) / DROUT_LEN;
+
+		zvm_arrsetlen(ZVM_PRG->buf, p_write);
+	}
+
+	// find outputs ...
+	{
+		fn->n_outputs = 0;
+		fn->outputs_p = buftop();
+
+		// as a side effect of finding drains, node_output_bs32_p has
+		// 1's for all node outputs visited; for each instance output,
+		// add a drout
+
+		uint32_t* node_bs32 = get_node_output_bs32(mod);
+		for (int i = 0; i < mod->n_node_outputs; i++) {
+			if (!bs32_test(node_bs32, i)) {
+				continue;
+			}
+			uint32_t* node_output = bufp(mod->node_outputs_p + i*2);
+
+			uint32_t code = *bufp(node_output[0]);
+			int op = code & ZVM_OP_MASK;
+			if (op != ZVM_OP(INSTANCE)) {
+				continue;
+			}
+
+			fn->n_outputs++;
+			push_drout(node_output[0], node_output[1]);
+		}
+	}
+
+	// TODO initialize the remaining drout fields...
 }
 
 void zvm_end_program(uint32_t main_module_id)
