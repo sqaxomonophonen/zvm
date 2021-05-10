@@ -371,7 +371,6 @@ static void trace(struct tracer* tr, uint32_t p)
 			struct zvm_module* mod2 = &ZVM_PRG->modules[module_id];
 			if (mod2->n_outputs == 1 && unpack_index == -1) unpack_index = 0;
 			zvm_assert(0 <= unpack_index && unpack_index < mod2->n_outputs && "expected valid unpack");
-			uint32_t* bs32 = get_output_input_dep_bs32(mod2, unpack_index);
 
 			if (tr->instance_output_visitor != NULL) {
 				tr->instance_output_visitor(tr, p, unpack_index);
@@ -379,7 +378,7 @@ static void trace(struct tracer* tr, uint32_t p)
 
 			if (!tr->break_at_instance) {
 				for (int i = 0; i < mod2->n_inputs; i++) {
-					if (bs32_test(bs32, i)) {
+					if (bs32_test(get_output_input_dep_bs32(mod2, unpack_index), i)) {
 						trace(tr, *bufp(zvm__arg_index(p, i)));
 					}
 				}
@@ -637,9 +636,8 @@ static void add_drain_instance_output_visitor(struct tracer* tr, uint32_t p, int
 	zvm_assert(zvm__is_valid_module_id(module_id));
 	struct zvm_module* mod2 = &ZVM_PRG->modules[module_id];
 
-	uint32_t* bs32 = get_output_input_dep_bs32(mod2, output_index);
 	for (int i = 0; i < mod2->n_inputs; i++) {
-		if (!bs32_test(bs32, i)) {
+		if (!bs32_test(get_output_input_dep_bs32(mod2, output_index), i)) {
 			continue;
 		}
 		push_drout(p, i);
