@@ -673,15 +673,17 @@ static void drain_to_output_instance_output_visitor_count(struct tracer* tr, uin
 	uint32_t* drain = (uint32_t*)tr->usr;
 	drain[DROUT_COUNTER]++;
 
-	int i = drout_find(tracer_function(tr)->outputs_p, tracer_function(tr)->n_outputs, p, output_index);
-	uint32_t* output = bufp(tracer_function(tr)->outputs_p + i*DROUT_LEN);
+	struct zvm_function* fn = tracer_function(tr);
+	int i = drout_find(fn->outputs_p, fn->n_outputs, p, output_index);
+	uint32_t* output = bufp(fn->outputs_p + i*DROUT_LEN);
 	output[DROUT_DECR_LIST_N]++;
 }
 
 static void drain_to_output_instance_output_visitor_write(struct tracer* tr, uint32_t p, int output_index)
 {
-	int i = drout_find(tracer_function(tr)->outputs_p, tracer_function(tr)->n_outputs, p, output_index);
-	uint32_t* output = bufp(tracer_function(tr)->outputs_p + i*DROUT_LEN);
+	struct zvm_function* fn = tracer_function(tr);
+	int i = drout_find(fn->outputs_p, fn->n_outputs, p, output_index);
+	uint32_t* output = bufp(fn->outputs_p + i*DROUT_LEN);
 	bufp(output[DROUT_DECR_LIST_P])[output[DROUT_DECR_LIST_N]++] = *((int*)tr->usr);
 }
 
@@ -711,8 +713,9 @@ static void emit_function(uint32_t function_id)
 
 	// find drains ...
 	{
-		resolve_function_id(function_id)->n_drains = 0;
-		resolve_function_id(function_id)->drains_p = buftop();
+		struct zvm_function* fn = resolve_function_id(function_id);
+		fn->n_drains = 0;
+		fn->drains_p = buftop();
 
 		for (int output_index = 0; output_index < mod->n_outputs; output_index++) {
 			if (!output_in_drain_request(fnkey.drain_request_bs32_p, output_index)) {
@@ -721,7 +724,7 @@ static void emit_function(uint32_t function_id)
 			add_drain(function_id, ZVM_NIL_P, output_index);
 		}
 
-		if (state_in_drain_request(resolve_function_id(function_id)->key.drain_request_bs32_p)) {
+		if (state_in_drain_request(fn->key.drain_request_bs32_p)) {
 			uint32_t p = mod->code_begin_p;
 			const uint32_t p_end = mod->code_end_p;
 			while (p < p_end) {
@@ -745,15 +748,15 @@ static void emit_function(uint32_t function_id)
 
 		// sort and compact drain array by removing duplicates
 
-		const int n_drains_with_dupes = (buftop() - resolve_function_id(function_id)->drains_p) / DROUT_LEN;
+		const int n_drains_with_dupes = (buftop() - fn->drains_p) / DROUT_LEN;
 		qsort(
-			bufp(resolve_function_id(function_id)->drains_p),
+			bufp(fn->drains_p),
 			n_drains_with_dupes,
 			DROUT_SZ,
 			drout_compar);
 
-		uint32_t p_read = resolve_function_id(function_id)->drains_p;
-		uint32_t p_write = resolve_function_id(function_id)->drains_p;
+		uint32_t p_read = fn->drains_p;
+		uint32_t p_write = fn->drains_p;
 		uint32_t p_end = buftop();
 
 		while (p_read < p_end) {
@@ -771,15 +774,16 @@ static void emit_function(uint32_t function_id)
 		}
 		zvm_assert(p_read == p_end);
 
-		resolve_function_id(function_id)->n_drains = (p_write - resolve_function_id(function_id)->drains_p) / DROUT_LEN;
+		fn->n_drains = (p_write - fn->drains_p) / DROUT_LEN;
 
 		zvm_arrsetlen(ZVM_PRG->buf, p_write);
 	}
 
 	// find outputs ...
 	{
-		resolve_function_id(function_id)->n_outputs = 0;
-		resolve_function_id(function_id)->outputs_p = buftop();
+		struct zvm_function* fn = resolve_function_id(function_id);
+		fn->n_outputs = 0;
+		fn->outputs_p = buftop();
 
 		// as a side effect of finding drains, node_output_bs32_p has
 		// 1's for all node outputs visited; for each instance output,
@@ -798,7 +802,7 @@ static void emit_function(uint32_t function_id)
 				continue;
 			}
 
-			resolve_function_id(function_id)->n_outputs++;
+			fn->n_outputs++;
 			push_drout(node_output[0], node_output[1]);
 		}
 	}
@@ -806,23 +810,27 @@ static void emit_function(uint32_t function_id)
 	// initialize counters and decrement lists
 
 	for (int pass = 0; pass < 2; pass++) {
+		struct zvm_function* fn = resolve_function_id(function_id);
+		const int n_drains = fn->n_drains;
+		const int n_outputs = fn->n_outputs;
 
 		if (pass == 1) {
-			// clear counter; used for indexing and are reinitialized below
+			// reset counters; used for indexing when writing
+			// decrement list and are thus reinitialized
 
-			for (int i = 0; i < resolve_function_id(function_id)->n_drains; i++) {
-				uint32_t* drain = bufp(resolve_function_id(function_id)->drains_p + i*DROUT_LEN);
+			for (int i = 0; i < n_drains; i++) {
+				uint32_t* drain = bufp(fn->drains_p + i*DROUT_LEN);
 				drain[DROUT_DECR_LIST_N] = 0;
 			}
 
-			for (int i = 0; i < resolve_function_id(function_id)->n_outputs; i++) {
-				uint32_t* output = bufp(resolve_function_id(function_id)->outputs_p + i*DROUT_LEN);
+			for (int i = 0; i < n_outputs; i++) {
+				uint32_t* output = bufp(fn->outputs_p + i*DROUT_LEN);
 				output[DROUT_DECR_LIST_N] = 0;
 			}
 		}
 
-		for (int i = 0; i < resolve_function_id(function_id)->n_drains; i++) {
-			uint32_t* drain = bufp(resolve_function_id(function_id)->drains_p + i*DROUT_LEN);
+		for (int i = 0; i < n_drains; i++) {
+			uint32_t* drain = bufp(fn->drains_p + i*DROUT_LEN);
 			struct tracer tr = {
 				.mod = mod,
 				.function_id = function_id,
@@ -832,7 +840,7 @@ static void emit_function(uint32_t function_id)
 					: (void*)&i,
 				.instance_output_visitor = (pass == 0)
 					? drain_to_output_instance_output_visitor_count
-					: drain_to_output_instance_output_visitor_write
+					: drain_to_output_instance_output_visitor_write,
 			};
 			uint32_t p = (drain[DROUT_P] == ZVM_NIL_P)
 				? bufp(tr.mod->outputs_p)[drain[DROUT_INDEX]]
@@ -841,8 +849,8 @@ static void emit_function(uint32_t function_id)
 			trace(&tr, p);
 		}
 
-		for (int i = 0; i < resolve_function_id(function_id)->n_outputs; i++) {
-			uint32_t* output = bufp(resolve_function_id(function_id)->outputs_p + i*DROUT_LEN);
+		for (int i = 0; i < n_outputs; i++) {
+			uint32_t* output = bufp(fn->outputs_p + i*DROUT_LEN);
 			uint32_t code = *bufp(output[DROUT_P]);
 			int op = code & ZVM_OP_MASK;
 			zvm_assert(op == ZVM_OP(INSTANCE));
@@ -851,12 +859,13 @@ static void emit_function(uint32_t function_id)
 			struct zvm_module* mod2 = &ZVM_PRG->modules[module_id];
 
 			uint32_t* bs32 = get_output_input_dep_bs32(mod2, output[DROUT_INDEX]);
-			for (int i = 0; i < mod2->n_inputs; i++) {
-				if (!bs32_test(bs32, i)) {
+			for (int j = 0; j < mod2->n_inputs; j++) {
+				if (!bs32_test(bs32, j)) {
 					continue;
 				}
-				int di = drout_find(resolve_function_id(function_id)->drains_p, resolve_function_id(function_id)->n_drains, output[DROUT_P], i);
-				uint32_t* drain = bufp(resolve_function_id(function_id)->drains_p + di*DROUT_LEN);
+
+				int di = drout_find(fn->drains_p, n_drains, output[DROUT_P], j);
+				uint32_t* drain = bufp(fn->drains_p + di*DROUT_LEN);
 
 				if (pass == 0) {
 					output[DROUT_COUNTER]++;
@@ -876,16 +885,16 @@ static void emit_function(uint32_t function_id)
 			int n_total = 0;
 			uint32_t p = buftop();
 
-			for (int i = 0; i < resolve_function_id(function_id)->n_drains; i++) {
-				uint32_t* drain = bufp(resolve_function_id(function_id)->drains_p + i*DROUT_LEN);
+			for (int i = 0; i < n_drains; i++) {
+				uint32_t* drain = bufp(fn->drains_p + i*DROUT_LEN);
 				drain[DROUT_DECR_LIST_P] = p;
 				int n = drain[DROUT_DECR_LIST_N];
 				p += n;
 				n_total += n;
 			}
 
-			for (int i = 0; i < resolve_function_id(function_id)->n_outputs; i++) {
-				uint32_t* output = bufp(resolve_function_id(function_id)->outputs_p + i*DROUT_LEN);
+			for (int i = 0; i < n_outputs; i++) {
+				uint32_t* output = bufp(fn->outputs_p + i*DROUT_LEN);
 				output[DROUT_DECR_LIST_P] = p;
 				int n = output[DROUT_DECR_LIST_N];
 				p += n;
@@ -898,16 +907,21 @@ static void emit_function(uint32_t function_id)
 
 	#if 0
 	#ifdef VERBOSE_DEBUG
-	for (int i = 0; i < resolve_function_id(function_id)->n_drains; i++) {
-		uint32_t* drain = bufp(resolve_function_id(function_id)->drains_p + i*DROUT_LEN);
+	struct zvm_function* fn = resolve_function_id(function_id);
+	printf("\n");
+	for (int i = 0; i < fn->n_drains; i++) {
+		uint32_t* drain = bufp(fn->drains_p + i*DROUT_LEN);
 		printf("drain %d: p=%d index=%d counter=%d decr_list_n=%d decr_list_p=%d decr_list=[", i, drain[DROUT_P], drain[DROUT_INDEX], drain[DROUT_COUNTER], drain[DROUT_DECR_LIST_N], drain[DROUT_DECR_LIST_P]);
 		for (int j = 0; j < drain[DROUT_DECR_LIST_N]; j++) {
 			printf("%s%d", j == 0 ? "" : " ", *bufp(drain[DROUT_DECR_LIST_P]+j));
 		}
 		printf("]\n");
 	}
-	for (int i = 0; i < resolve_function_id(function_id)->n_outputs; i++) {
-		uint32_t* output = bufp(resolve_function_id(function_id)->outputs_p + i*DROUT_LEN);
+
+	printf("\n");
+	for (int i = 0; i < fn->n_outputs; i++) {
+		struct zvm_function* fn = resolve_function_id(function_id);
+		uint32_t* output = bufp(fn->outputs_p + i*DROUT_LEN);
 		printf("output %d: p=%d index=%d counter=%d decr_list_n=%d decr_list_p=%d decr_list=[", i, output[DROUT_P], output[DROUT_INDEX], output[DROUT_COUNTER], output[DROUT_DECR_LIST_N], output[DROUT_DECR_LIST_P]);
 		for (int j = 0; j < output[DROUT_DECR_LIST_N]; j++) {
 			printf("%s%d", j == 0 ? "" : " ", *bufp(output[DROUT_DECR_LIST_P]+j));
