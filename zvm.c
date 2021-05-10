@@ -986,9 +986,78 @@ static void emit_function(uint32_t function_id)
 					sizeof(*output_queue),
 					drout_index_compar);
 
-				for (int i = output_queue_i; i < output_queue_n; i++) {
-					// TODO...?
+				int doing_full_calls = 0;
+				for (int attempt = 0; attempt < 2; attempt++) {
+					const int is_full_call_attempt = (attempt == 0);
+					const int is_best_effort_attempt = (attempt == 1);
+
+					if (!is_full_call_attempt && doing_full_calls) {
+						break;
+					}
+
+					int i = output_queue_i;
+					while (i < output_queue_n) {
+						int i0 = i;
+						uint32_t p0 = bufp(fn->outputs_p + output_queue[i0]*DROUT_LEN)[DROUT_P];
+						for (; i < output_queue_n; i++) {
+							uint32_t p = bufp(fn->outputs_p + output_queue[i]*DROUT_LEN)[DROUT_P];
+							if (p != p0) break;
+						}
+						int i1 = i;
+
+						uint32_t code = *bufp(p0);
+						int op = code & ZVM_OP_MASK;
+						zvm_assert(op == ZVM_OP(INSTANCE));
+						int module_id = code >> ZVM_OP_BITS;
+						zvm_assert(zvm__is_valid_module_id(module_id));
+						struct zvm_module* instance_mod = &ZVM_PRG->modules[module_id];
+
+						if (is_full_call_attempt) {
+							int n_instance_outputs = mod->n_outputs;
+							uint32_t* node_bs32 = get_node_output_bs32(mod);
+							i = i0;
+							int is_full_call = 1;
+							for (int j = 0; j < n_instance_outputs; j++) {
+								int node_index = get_node_index(mod, p0, j);
+								if (!bs32_test(node_bs32, node_index)) {
+									continue;
+								}
+
+								uint32_t* output = bufp(fn->outputs_p + output_queue[i++]*DROUT_LEN);
+								if (output[DROUT_INDEX] != j) {
+									is_full_call = 0;
+									break;
+								}
+							}
+
+							if (is_full_call) {
+								// TODO ...
+								doing_full_calls = 0;
+							}
+
+							i = i1;
+						} else if (is_best_effort_attempt) {
+							zvm_assert(!doing_full_calls);
+							// TODO ... so uhm.. just count the number of provided outputs...
+							// choose the one with the largest number? or should I go for
+							// best ratio? or the one that releases the most outputs? :)
+							// counting outputs seems easiest, and is probabably good enough?
+						} else {
+							zvm_assert(!"unreachable");
+						}
+
+					}
 				}
+
+
+				#if 0
+				for (int i = output_queue_i; i < output_queue_n; i++) {
+					uint32_t code = *bufp(p);
+					int instance_module_id = code >> ZVM_OP_BITS;
+					zvm_assert(zvm__is_valid_module_id(instance_module_id));
+					struct zvm_module* instance_mod = &ZVM_PRG->modules[instance_module_id];
+				}
+				#endif
 			}
 
 
