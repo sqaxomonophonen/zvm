@@ -687,6 +687,16 @@ static void drain_to_output_instance_output_visitor_write(struct tracer* tr, uin
 	bufp(output[DROUT_DECR_LIST_P])[output[DROUT_DECR_LIST_N]++] = *((int*)tr->usr);
 }
 
+uint32_t* drout_index_compar_drouts;
+static int drout_index_compar(const void* va, const void* vb)
+{
+	uint32_t a = *(uint32_t*)va;
+	uint32_t b = *(uint32_t*)vb;
+	return drout_compar(
+		&drout_index_compar_drouts[a * DROUT_LEN],
+		&drout_index_compar_drouts[b * DROUT_LEN]
+	);
+}
 
 static void emit_function(uint32_t function_id)
 {
@@ -898,6 +908,99 @@ static void emit_function(uint32_t function_id)
 
 			(void)zvm_arradd(ZVM_PRG->buf, p - p0);
 		}
+	}
+
+	{
+		struct zvm_function* fn = resolve_function_id(function_id);
+
+		const int n_drains = fn->n_drains;
+		uint32_t drain_queue_p = buftop();
+		int drain_queue_i = 0;
+		int drain_queue_n = 0;
+		(void)zvm_arradd(ZVM_PRG->buf, n_drains);
+
+		const int n_outputs = fn->n_outputs;
+		uint32_t output_queue_p = buftop();
+		int output_queue_i = 0;
+		int output_queue_n = 0;
+		(void)zvm_arradd(ZVM_PRG->buf, n_outputs);
+
+		uint32_t* drain_queue = bufp(drain_queue_p);
+		uint32_t* output_queue = bufp(output_queue_p);
+
+		for (int i = 0; i < n_drains; i++) {
+			uint32_t* drain = bufp(fn->drains_p + i*DROUT_LEN);
+			if (drain[DROUT_COUNTER] == 0) {
+				drain_queue[drain_queue_n++] = i;
+			}
+		}
+
+		clear_node_visit_set(mod);
+		for (int i = 0; i < n_outputs; i++) {
+			uint32_t* output = bufp(fn->outputs_p + i*DROUT_LEN);
+			if (output[DROUT_COUNTER] == 0) {
+				output_queue[output_queue_n++] = i;
+			}
+
+			// mark instance output nodes in visit set; this makes
+			// it easy to extract the "full drain request" of an
+			// instance
+			visit_node(mod, output[DROUT_P], output[DROUT_INDEX]);
+		}
+
+		for (;;) {
+			while (drain_queue_i < drain_queue_n) {
+				const int drain_index = drain_queue[drain_queue_i++];
+				uint32_t* drain = bufp(fn->drains_p + drain_index*DROUT_LEN);
+
+				#ifdef VERBOSE_DEBUG
+				printf("DRAIN i=%d p=%d\n", drain_index, drain[DROUT_P]);
+				#endif
+
+				int n = drain[DROUT_DECR_LIST_N];
+				uint32_t p = drain[DROUT_DECR_LIST_P];
+				for (int i = 0; i < n; i++) {
+					const int output_index = *bufp(p+i);
+					uint32_t* output = bufp(fn->outputs_p + output_index*DROUT_LEN);
+					zvm_assert(output[DROUT_COUNTER] > 0);
+					output[DROUT_COUNTER]--;
+					if (output[DROUT_COUNTER] == 0) {
+						output_queue[output_queue_n++] = output_index;
+					}
+				}
+			}
+
+			if (output_queue_n > output_queue_i) {
+				// sort counter=0 outputs by [p,i]; we prefer
+				// to push towards "full function calls"
+				// instead of splitting instances into multiple
+				// function calls. "full function calls" are
+				// easier to detect when ordered by [p,i] (all
+				// output requests for a given instance will be
+				// sequential)
+
+				drout_index_compar_drouts = bufp(fn->outputs_p);
+				qsort(
+					&output_queue[output_queue_i],
+					output_queue_n - output_queue_i,
+					sizeof(*output_queue),
+					drout_index_compar);
+
+				for (int i = output_queue_i; i < output_queue_n; i++) {
+					// TODO...?
+				}
+			}
+
+
+			break; // XXX
+		}
+
+		#if 0
+		zvm_assert(drain_queue_i == drain_queue_n);
+		zvm_assert(drain_queue_n == n_drains);
+		zvm_assert(output_queue_i == output_queue_n);
+		zvm_assert(output_queue_n == n_outputs);
+		#endif
 	}
 
 	#if 0
