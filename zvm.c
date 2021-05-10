@@ -880,7 +880,8 @@ static void emit_function(uint32_t function_id)
 
 		if (pass == 0) {
 			// allocate decrement lists
-			uint32_t p = buftop();
+			const uint32_t p0 = buftop();
+			uint32_t p = p0;
 
 			for (int i = 0; i < n_drains; i++) {
 				uint32_t* drain = bufp(fn->drains_p + i*DROUT_LEN);
@@ -894,7 +895,7 @@ static void emit_function(uint32_t function_id)
 				p += output[DROUT_DECR_LIST_N];
 			}
 
-			(void)zvm_arradd(ZVM_PRG->buf, buftop() - p);
+			(void)zvm_arradd(ZVM_PRG->buf, p - p0);
 		}
 	}
 
