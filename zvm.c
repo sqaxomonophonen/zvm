@@ -788,8 +788,8 @@ static void emit_function(uint32_t function_id)
 		}
 	}
 
-	// trace from drain back to instance outputs
-	clear_node_visit_set(mod);
+	// trace from drain back to instance outputs; update drain
+	// DROUT_COUNTER, and output DROUT_DECR_LIST_N
 	for (int i = 0; i < fn->n_drains; i++) {
 		uint32_t* drain = bufp(fn->drains_p + i*DROUT_LEN);
 		struct tracer tr = {
@@ -802,8 +802,43 @@ static void emit_function(uint32_t function_id)
 		uint32_t p = (drain[DROUT_P] == ZVM_NIL_P)
 			? bufp(tr.mod->outputs_p)[drain[DROUT_INDEX]]
 			: *bufp(zvm__arg_index(drain[DROUT_P], drain[DROUT_INDEX]));
+		clear_node_visit_set(mod);
 		trace(&tr, p);
+
 	}
+
+	// set output DROUT_COUNTER, and drain DROUT_DECR_LIST_N
+	for (int i = 0; i < fn->n_outputs; i++) {
+		uint32_t* output = bufp(fn->outputs_p + i*DROUT_LEN);
+		uint32_t code = *bufp(output[DROUT_P]);
+		int op = code & ZVM_OP_MASK;
+		zvm_assert(op == ZVM_OP(INSTANCE));
+		int module_id = code >> ZVM_OP_BITS;
+		zvm_assert(zvm__is_valid_module_id(module_id));
+		struct zvm_module* mod2 = &ZVM_PRG->modules[module_id];
+
+		uint32_t* bs32 = get_output_input_dep_bs32(mod2, output[DROUT_INDEX]);
+		for (int i = 0; i < mod2->n_inputs; i++) {
+			if (!bs32_test(bs32, i)) {
+				continue;
+			}
+			int di = drout_find(fn->drains_p, fn->n_drains, output[DROUT_P], i);
+			uint32_t* drain = bufp(fn->drains_p + di*DROUT_LEN);
+			output[DROUT_COUNTER]++;
+			drain[DROUT_DECR_LIST_N]++;
+		}
+	}
+
+	#ifdef VERBOSE_DEBUG
+	for (int i = 0; i < fn->n_drains; i++) {
+		uint32_t* drain = bufp(fn->drains_p + i*DROUT_LEN);
+		printf("drain %d: p=%d index=%d counter=%d decr_list_n=%d\n", i, drain[DROUT_P], drain[DROUT_INDEX], drain[DROUT_COUNTER], drain[DROUT_DECR_LIST_N]);
+	}
+	for (int i = 0; i < fn->n_outputs; i++) {
+		uint32_t* output = bufp(fn->outputs_p + i*DROUT_LEN);
+		printf("output %d: p=%d index=%d counter=%d decr_list_n=%d\n", i, output[DROUT_P], output[DROUT_INDEX], output[DROUT_COUNTER], output[DROUT_DECR_LIST_N]);
+	}
+	#endif
 
 }
 
