@@ -795,15 +795,16 @@ static void emit_function(uint32_t function_id)
 				continue;
 			}
 			uint32_t* node_output = bufp(mod->node_outputs_p + i*2);
+			uint32_t p = node_output[0];
 
-			uint32_t code = *bufp(node_output[0]);
+			uint32_t code = *bufp(p);
 			int op = code & ZVM_OP_MASK;
 			if (op != ZVM_OP(INSTANCE)) {
 				continue;
 			}
 
 			fn->n_outputs++;
-			push_drout(node_output[0], node_output[1]);
+			push_drout(p, node_output[1]);
 		}
 	}
 
