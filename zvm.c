@@ -954,8 +954,7 @@ static void emit_function(uint32_t function_id)
 				uint32_t* drain = bufp(fn->drains_p + drain_index*DROUT_LEN);
 
 				#ifdef VERBOSE_DEBUG
-				// XXX I'm seeing duplicate p-values... that's bad!
-				printf("DRAIN i=%d p=%d\n", drain_index, drain[DROUT_P]);
+				printf("DRAIN i=%d ii=%d ->%d:%d\n", drain_queue_i-1, drain_index, drain[DROUT_P], drain[DROUT_INDEX]);
 				#endif
 
 				int n = drain[DROUT_DECR_LIST_N];
