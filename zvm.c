@@ -324,9 +324,12 @@ static int visit_node(struct zvm_module* mod, uint32_t p, uint32_t output_index)
 
 struct tracer {
 	struct zvm_module* mod;
+	struct zvm_function* fn;
 
 	void(*module_input_visitor)(struct tracer*, uint32_t p);
 	void(*instance_output_visitor)(struct tracer*, uint32_t p, int output_index);
+
+	int break_at_instance;
 
 	void* usr;
 };
@@ -374,11 +377,14 @@ static void trace(struct tracer* tr, uint32_t p)
 				tr->instance_output_visitor(tr, p, unpack_index);
 			}
 
-			for (int i = 0; i < mod2->n_inputs; i++) {
-				if (bs32_test(bs32, i)) {
-					trace(tr, *bufp(zvm__arg_index(p, i)));
+			if (!tr->break_at_instance) {
+				for (int i = 0; i < mod2->n_inputs; i++) {
+					if (bs32_test(bs32, i)) {
+						trace(tr, *bufp(zvm__arg_index(p, i)));
+					}
 				}
 			}
+
 			return;
 		}
 
@@ -603,9 +609,41 @@ static void push_drout(uint32_t p, int index)
 	drain[DROUT_DECR_LIST_P] = 0;
 }
 
+static int drout_find(uint32_t drouts_p, int n, uint32_t kp, uint32_t ki)
+{
+	int left = 0;
+	int right = n;
+
+	uint32_t k[] = {kp,ki};
+	while (left <= right) {
+		int mid = (left+right) >> 1;
+		int cmp = drout_compar(bufp(drouts_p + mid*DROUT_LEN), k);
+		if (cmp < 0) {
+			left = mid + 1;
+		} else if (cmp > 0) {
+			right = mid - 1;
+		} else {
+			return mid;
+		}
+	}
+
+	zvm_assert(!"drout not found");
+}
+
 static void add_drain_instance_output_visitor(struct tracer* tr, uint32_t p, int output_index)
 {
-	push_drout(p, output_index);
+	uint32_t code = *bufp(p);
+	int module_id = code >> ZVM_OP_BITS;
+	zvm_assert(zvm__is_valid_module_id(module_id));
+	struct zvm_module* mod2 = &ZVM_PRG->modules[module_id];
+
+	uint32_t* bs32 = get_output_input_dep_bs32(mod2, output_index);
+	for (int i = 0; i < mod2->n_inputs; i++) {
+		if (!bs32_test(bs32, i)) {
+			continue;
+		}
+		push_drout(p, i);
+	}
 }
 
 static void add_drain(struct zvm_function* fn, uint32_t p, int index)
@@ -620,6 +658,16 @@ static void add_drain(struct zvm_function* fn, uint32_t p, int index)
 		? bufp(tr.mod->outputs_p)[index]
 		: *bufp(zvm__arg_index(p, index));
 	trace(&tr, pp);
+}
+
+static void drain_to_output_instance_output_visitor(struct tracer* tr, uint32_t p, int output_index)
+{
+	uint32_t* drain = (uint32_t*)tr->usr;
+	drain[DROUT_COUNTER]++;
+
+	int i = drout_find(tr->fn->outputs_p, tr->fn->n_outputs, p, output_index);
+	uint32_t* output = bufp(tr->fn->outputs_p + i*DROUT_LEN);
+	output[DROUT_DECR_LIST_N]++;
 }
 
 static void emit_function(uint32_t function_id)
@@ -740,7 +788,23 @@ static void emit_function(uint32_t function_id)
 		}
 	}
 
-	// TODO initialize the remaining drout fields...
+	// trace from drain back to instance outputs
+	clear_node_visit_set(mod);
+	for (int i = 0; i < fn->n_drains; i++) {
+		uint32_t* drain = bufp(fn->drains_p + i*DROUT_LEN);
+		struct tracer tr = {
+			.mod = mod,
+			.fn = fn,
+			.usr = drain,
+			.break_at_instance = 1, // stop at instance outputs
+			.instance_output_visitor = drain_to_output_instance_output_visitor,
+		};
+		uint32_t p = (drain[DROUT_P] == ZVM_NIL_P)
+			? bufp(tr.mod->outputs_p)[drain[DROUT_INDEX]]
+			: *bufp(zvm__arg_index(drain[DROUT_P], drain[DROUT_INDEX]));
+		trace(&tr, p);
+	}
+
 }
 
 void zvm_end_program(uint32_t main_module_id)
