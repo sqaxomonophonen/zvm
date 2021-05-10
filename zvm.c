@@ -875,33 +875,26 @@ static void emit_function(uint32_t function_id)
 				} else {
 					zvm_assert(!"unreachable");
 				}
-
 			}
 		}
 
 		if (pass == 0) {
 			// allocate decrement lists
-
-			int n_total = 0;
 			uint32_t p = buftop();
 
 			for (int i = 0; i < n_drains; i++) {
 				uint32_t* drain = bufp(fn->drains_p + i*DROUT_LEN);
 				drain[DROUT_DECR_LIST_P] = p;
-				int n = drain[DROUT_DECR_LIST_N];
-				p += n;
-				n_total += n;
+				p += drain[DROUT_DECR_LIST_N];
 			}
 
 			for (int i = 0; i < n_outputs; i++) {
 				uint32_t* output = bufp(fn->outputs_p + i*DROUT_LEN);
 				output[DROUT_DECR_LIST_P] = p;
-				int n = output[DROUT_DECR_LIST_N];
-				p += n;
-				n_total += n;
+				p += output[DROUT_DECR_LIST_N];
 			}
 
-			(void)zvm_arradd(ZVM_PRG->buf, n_total);
+			(void)zvm_arradd(ZVM_PRG->buf, buftop() - p);
 		}
 	}
 
