@@ -1016,6 +1016,13 @@ static void emit_function(uint32_t function_id)
 							int n_instance_outputs = mod->n_outputs;
 							uint32_t* node_bs32 = get_node_output_bs32(mod);
 							i = i0;
+
+							// a call is "full" if the requested instance output set
+							// is identical to the sequence of output requests.
+							// NOTE: a call can be "full" even if it's part of a
+							// function chain (i.e. when an instance is split into
+							// multiple functions) as long as it's the last call
+							// in the chain
 							int is_full_call = 1;
 							for (int j = 0; j < n_instance_outputs; j++) {
 								int node_index = get_node_index(mod, p0, j);
@@ -1031,8 +1038,8 @@ static void emit_function(uint32_t function_id)
 							}
 
 							if (is_full_call) {
-								// TODO ...
-								doing_full_calls = 0;
+								// TODO: clear visit set / insert function stub?
+								doing_full_calls = 1;
 							}
 
 							i = i1;
@@ -1042,6 +1049,8 @@ static void emit_function(uint32_t function_id)
 							// choose the one with the largest number? or should I go for
 							// best ratio? or the one that releases the most outputs? :)
 							// counting outputs seems easiest, and is probabably good enough?
+
+							// TODO: clear visit set / insert function stub?
 						} else {
 							zvm_assert(!"unreachable");
 						}
