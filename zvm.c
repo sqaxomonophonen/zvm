@@ -568,29 +568,49 @@ static int fnkey_cmp(const void* va, const void* vb)
 	if (c0 != 0) return c0;
 
 	struct zvm_module* mod = &ZVM_PRG->modules[a->module_id];
-	const int n = 1 + mod->n_inputs;
+	const int drain_request_sz = get_module_drain_request_sz(mod);
 
 	if (a->full_drain_request_bs32_p != b->full_drain_request_bs32_p) {
-		int c1 = bs32_cmp(n, bufp(a->full_drain_request_bs32_p), bufp(b->full_drain_request_bs32_p));
+		int c1 = bs32_cmp(drain_request_sz, bufp(a->full_drain_request_bs32_p), bufp(b->full_drain_request_bs32_p));
 		if (c1 != 0) return c1;
 	}
 
 	if (a->drain_request_bs32_p != b->drain_request_bs32_p) {
-		int c2 = bs32_cmp(n, bufp(a->drain_request_bs32_p), bufp(b->drain_request_bs32_p));
+		int c2 = bs32_cmp(drain_request_sz, bufp(a->drain_request_bs32_p), bufp(b->drain_request_bs32_p));
 		if (c2 != 0) return c2;
 	}
 
 	return u32cmp(a->prev_function_id, b->prev_function_id);
 }
 
-static inline int state_in_drain_request(uint32_t p)
+static inline int drain_request_state_index()
 {
-	return bs32_test(bufp(p), 0);
+	return 0;
 }
 
-static inline int output_in_drain_request(uint32_t p, int output_index)
+static inline int drain_request_output_index(int output_index)
 {
-	return bs32_test(bufp(p), 1+output_index);
+	return 1+output_index;
+}
+
+static inline int drain_request_state_test(uint32_t p)
+{
+	return bs32_test(bufp(p), drain_request_state_index());
+}
+
+static inline int drain_request_output_test(uint32_t p, int output_index)
+{
+	return bs32_test(bufp(p), drain_request_output_index(output_index));
+}
+
+static void drain_request_state_set(uint32_t p)
+{
+	bs32_set(bufp(p), drain_request_state_index());
+}
+
+static void drain_request_output_set(uint32_t p, int output_index)
+{
+	bs32_set(bufp(p), drain_request_output_index(output_index));
 }
 
 #if 0
@@ -767,9 +787,10 @@ static int grok_function(uint32_t parent_function_id, uint32_t p, uint32_t outpu
 	int instance_module_id = code >> ZVM_OP_BITS;
 	zvm_assert(zvm__is_valid_module_id(instance_module_id));
 
-	struct zvm_module* mod = &ZVM_PRG->modules[instance_module_id];
-	const int drain_request_sz = get_module_drain_request_sz(mod);
+	struct zvm_module* instance_mod = &ZVM_PRG->modules[instance_module_id];
+	const int drain_request_sz = get_module_drain_request_sz(instance_mod);
 	struct zvm_function* pfn = &ZVM_PRG->functions[parent_function_id];
+	struct zvm_module* parent_mod = &ZVM_PRG->modules[pfn->key.module_id];
 
 	struct zvm_fnkey key = {
 		.module_id = instance_module_id,
@@ -781,27 +802,37 @@ static int grok_function(uint32_t parent_function_id, uint32_t p, uint32_t outpu
 	for (int i = 0; i < n_outputs; i++) {
 		uint32_t* output = bufp(pfn->outputs_p + *bufp(output_indices_p + i) * DROUT_LEN);
 		zvm_assert(output[DROUT_P] == p);
-		bs32_set(bufp(key.drain_request_bs32_p), output[DROUT_INDEX]);
+		uint32_t index = output[DROUT_INDEX];
+		if (index == ZVM_NIL_ID) {
+			drain_request_state_set(key.drain_request_bs32_p);
+		} else {
+			drain_request_output_set(key.drain_request_bs32_p, output[DROUT_INDEX]);
+		}
 	}
 
+	// find full_drain_request_bs32_p; either share with previous function
+	// if part of a chain, or generate a new
 	if (prev_function_id != ZVM_NIL_ID) {
 		struct zvm_fnkey prev_key = ZVM_PRG->functions[prev_function_id].key;
 		key.full_drain_request_bs32_p = prev_key.full_drain_request_bs32_p;
-		// TODO verify?
-	} else {
-		key.full_drain_request_bs32_p = bs32_alloc(drain_request_sz);
-		for (int i = 0; i < mod->n_outputs; i++) {
-			// TODO..
+		#ifdef DEBUG
+		// verify
+		uint32_t* node_bs32 = get_node_output_bs32(parent_mod);
+		for (int i = 0; i < instance_mod->n_outputs; i++) {
+			int node_index = get_node_index(parent_mod, p, i);
+			zvm_assert((bs32_test(node_bs32, node_index) == drain_request_output_test(key.full_drain_request_bs32_p, i)) && "unexpected full drain request pattern");
 		}
-		// TODO populate...
-
-		// jeg skal eh... finde... eh... instancen... så en p val ville
-		// være lækkert... hvilket jeg egentlig kunne hive fra
-		// output... lige bortset fra at et funktionskald godt kan have
-		// 0 outputs og stadigt være brugbart (state)... men state gøgl
-		// har jeg jo ikke lige tænkt over... det er sikkert outputs
-		// hvor index er nil? så det er ligesom en effekt der ikke går
-		// nogen vegne...
+		#endif
+	} else {
+		// use node visit set to produce full drain request
+		key.full_drain_request_bs32_p = bs32_alloc(drain_request_sz);
+		uint32_t* node_bs32 = get_node_output_bs32(parent_mod);
+		for (int i = 0; i < instance_mod->n_outputs; i++) {
+			int node_index = get_node_index(parent_mod, p, i);
+			if (bs32_test(node_bs32, node_index)) {
+				drain_request_output_set(key.full_drain_request_bs32_p, i);
+			}
+		}
 	}
 
 	int did_insert = 0;
@@ -844,13 +875,13 @@ static void emit_function(uint32_t function_id)
 		fn->drains_p = buftop();
 
 		for (int output_index = 0; output_index < mod->n_outputs; output_index++) {
-			if (!output_in_drain_request(fnkey.drain_request_bs32_p, output_index)) {
+			if (!drain_request_output_test(fnkey.drain_request_bs32_p, output_index)) {
 				continue;
 			}
 			add_drain(function_id, ZVM_NIL_P, output_index);
 		}
 
-		if (state_in_drain_request(fn->key.drain_request_bs32_p)) {
+		if (drain_request_state_test(fn->key.drain_request_bs32_p)) {
 			uint32_t p = mod->code_begin_p;
 			const uint32_t p_end = mod->code_end_p;
 			while (p < p_end) {
