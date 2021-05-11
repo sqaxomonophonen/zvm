@@ -509,7 +509,6 @@ int zvm_end_module()
 			int op = code & ZVM_OP_MASK;
 			if (op == ZVM_OP(INSTANCE)) {
 				uint32_t* xs = zvm_arradd(ZVM_PRG->buf, 2);
-				printf("instance p at %d\n", p);
 				xs[0] = p;
 				xs[1] = 0;
 				mod->n_instance_u32_values++;
@@ -840,6 +839,9 @@ static int grok_function(uint32_t parent_function_id, uint32_t p, uint32_t outpu
 	if (!did_insert) {
 		// no insert; retract allocations
 		zvm_arrsetlen(ZVM_PRG->buf, buftop0);
+		printf("reused function id %d\n", function_id);
+	} else {
+		printf("inserted function id %d\n", function_id);
 	}
 
 	return function_id;
@@ -1111,7 +1113,7 @@ static void emit_function(uint32_t function_id)
 				uint32_t* drain = bufp(fn->drains_p + drain_index*DROUT_LEN);
 
 				#ifdef VERBOSE_DEBUG
-				printf("DRAIN i=%d ii=%d ->%d:%d\n", drain_queue_i-1, drain_index, drain[DROUT_P], drain[DROUT_INDEX]);
+				//printf("DRAIN i=%d ii=%d ->%d:%d\n", drain_queue_i-1, drain_index, drain[DROUT_P], drain[DROUT_INDEX]);
 				#endif
 
 				int n = drain[DROUT_DECR_LIST_N];
