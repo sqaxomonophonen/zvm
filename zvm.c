@@ -778,7 +778,7 @@ static int drout_index_compar(const void* va, const void* vb)
 	);
 }
 
-static int grok_function(uint32_t parent_function_id, uint32_t p, uint32_t output_indices_p, int n_outputs, uint32_t prev_function_id)
+static int ack_instance_function(uint32_t parent_function_id, uint32_t p, uint32_t output_indices_p, int n_outputs, uint32_t prev_function_id, uint32_t drain_queue_p, int* drain_queue_np)
 {
 	uint32_t buftop0 = buftop();
 
@@ -797,15 +797,31 @@ static int grok_function(uint32_t parent_function_id, uint32_t p, uint32_t outpu
 		.drain_request_bs32_p = bs32_alloc(drain_request_sz),
 	};
 
-	// populate drain_request_bs32_p
 	for (int i = 0; i < n_outputs; i++) {
+		// populate drain_request_bs32_p ...
 		uint32_t* output = bufp(pfn->outputs_p + *bufp(output_indices_p + i) * DROUT_LEN);
 		zvm_assert(output[DROUT_P] == p);
 		uint32_t index = output[DROUT_INDEX];
 		if (index == ZVM_NIL_ID) {
+			// XXX currently not implemented elsewhere? is this how
+			// I want to do it? have a "nil index output request"
+			// signify state request?
 			drain_request_state_set(key.drain_request_bs32_p);
 		} else {
 			drain_request_output_set(key.drain_request_bs32_p, output[DROUT_INDEX]);
+		}
+
+		// potentially release outputs ...
+		uint32_t decr_list_n = output[DROUT_DECR_LIST_N];
+		uint32_t decr_list_p = output[DROUT_DECR_LIST_P];
+		for (int i = 0; i < decr_list_n; i++) {
+			uint32_t drain_index = *bufp(decr_list_p + i);
+			uint32_t* drain = bufp(pfn->drains_p + drain_index*DROUT_LEN);
+			zvm_assert(drain[DROUT_COUNTER] > 0 && "decrement when zero not expected");
+			drain[DROUT_COUNTER]--;
+			if (drain[DROUT_COUNTER] == 0) {
+				*bufp(drain_queue_p + (*(drain_queue_np)++)) = drain_index;
+			}
 		}
 	}
 
@@ -835,16 +851,19 @@ static int grok_function(uint32_t parent_function_id, uint32_t p, uint32_t outpu
 	}
 
 	int did_insert = 0;
-	uint32_t function_id = produce_fnkey_function_id(&key, &did_insert);
+	uint32_t instance_function_id = produce_fnkey_function_id(&key, &did_insert);
 	if (!did_insert) {
 		// no insert; retract allocations
 		zvm_arrsetlen(ZVM_PRG->buf, buftop0);
-		printf("reused function id %d\n", function_id);
+		printf("reused function id %d\n", instance_function_id); // XXX
 	} else {
-		printf("inserted function id %d\n", function_id);
+		printf("inserted function id %d\n", instance_function_id); // XXX
 	}
 
-	return function_id;
+	// set up potential chain by storing function id in instance->u32 map
+	instance_u32_map_set(parent_mod, p, instance_function_id);
+
+	return instance_function_id;
 }
 
 static void emit_function(uint32_t function_id)
@@ -1158,6 +1177,11 @@ static void emit_function(uint32_t function_id)
 						break;
 					}
 
+					int best_effort_n = 0;
+					int best_effort_i0 = 0;
+					uint32_t best_effort_p = 0;
+					uint32_t best_effort_prev_function_id = 0;
+
 					int i = output_queue_i;
 					while (i < output_queue_n) {
 						uint32_t* output_queue = bufp(output_queue_p);
@@ -1204,12 +1228,14 @@ static void emit_function(uint32_t function_id)
 							}
 
 							if (is_full_call) {
-								uint32_t instance_function_id = grok_function(
+								ack_instance_function(
 									function_id,
 									p0,
 									output_queue_p+i0,
 									i1-i0,
-									prev_function_id);
+									prev_function_id,
+									drain_queue_p,
+									&drain_queue_n);
 
 								// TODO and remove outputs? how?
 								doing_full_calls = 1;
@@ -1218,18 +1244,32 @@ static void emit_function(uint32_t function_id)
 							i = i1;
 						} else if (is_best_effort_attempt) {
 							zvm_assert(!doing_full_calls);
-							// TODO ... so uhm.. just count the number of provided outputs...
-							// choose the one with the largest number? or should I go for
-							// best ratio? or the one that releases the most outputs? :)
-							// counting outputs seems easiest, and is probabably good enough?
+							int n = i1-i0;
+							if (n > best_effort_n) {
+								best_effort_n = n;
+								best_effort_i0 = i0;
+								best_effort_p = p0;
+								best_effort_prev_function_id = prev_function_id;
+							}
 
-							//spit_function(prev_function_id);
 
-							// TODO and remove outputs? how?
 						} else {
 							zvm_assert(!"unreachable");
 						}
 
+					}
+
+					if (is_best_effort_attempt && best_effort_n > 0) {
+						ack_instance_function(
+							function_id,
+							best_effort_p,
+							output_queue_p+best_effort_i0,
+							best_effort_n,
+							best_effort_prev_function_id,
+							drain_queue_p,
+							&drain_queue_n);
+
+						// TODO and remove outputs? how?
 					}
 				}
 
