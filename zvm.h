@@ -81,6 +81,9 @@ struct zvm_module {
 
 	uint32_t input_bs32s_p;
 
+	int n_instance_u32_values;
+	uint32_t instance_u32_map_p;
+
 	int n_bits;
 	int refcount;
 };
