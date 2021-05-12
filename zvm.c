@@ -671,6 +671,7 @@ enum {
 	DROUT_COUNTER,
 	DROUT_DECR_LIST_N,
 	DROUT_DECR_LIST_P,
+	DROUT_USR,
 	DROUT_LEN,
 };
 
@@ -691,6 +692,7 @@ static void push_drout(uint32_t p, int index)
 	drain[DROUT_COUNTER] = 0;
 	drain[DROUT_DECR_LIST_N] = 0;
 	drain[DROUT_DECR_LIST_P] = 0;
+	drain[DROUT_USR] = 0;
 }
 
 static int drout_find(uint32_t drouts_p, int n, uint32_t kp, uint32_t ki)
@@ -865,6 +867,55 @@ static int ack_instance_function(uint32_t parent_function_id, uint32_t p, uint32
 
 	return instance_function_id;
 }
+
+
+#define ENCODE_DRAIN(v)  ((v)&0x7fffffff)
+#define ENCODE_OUTPUT(v) ((v)|0x80000000)
+#define GET_VALUE(v)     ((v)&0x7fffffff)
+#define IS_DRAIN(v)      (((v)&0x80000000)==0)
+#define IS_OUTPUT(v)     !IS_DRAIN(v)
+
+static int drain_output_compar(const void* va, const void* vb)
+{
+	uint32_t a = *(uint32_t*)va;
+	uint32_t b = *(uint32_t*)vb;
+	int c0 = IS_OUTPUT(a) - IS_OUTPUT(b);
+	if (c0 != 0) return c0;
+	return a-b;
+}
+
+
+uint32_t* compar_outputs;
+static int queue_output_pi_compar(const void* va, const void* vb)
+{
+	uint32_t qa = *(uint32_t*)va;
+	uint32_t qb = *(uint32_t*)vb;
+	zvm_assert(IS_OUTPUT(qa));
+	zvm_assert(IS_OUTPUT(qb));
+	uint32_t a = GET_VALUE(qa);
+	uint32_t b = GET_VALUE(qb);
+
+	return drout_compar(
+		&compar_outputs[a*DROUT_LEN],
+		&compar_outputs[b*DROUT_LEN]
+	);
+}
+
+static int queue_output_full_compar(const void* va, const void* vb)
+{
+	uint32_t qa = *(uint32_t*)va;
+	uint32_t qb = *(uint32_t*)vb;
+	zvm_assert(IS_OUTPUT(qa));
+	zvm_assert(IS_OUTPUT(qb));
+	uint32_t a = GET_VALUE(qa);
+	uint32_t b = GET_VALUE(qb);
+	uint32_t* oa = &compar_outputs[a*DROUT_LEN];
+	uint32_t* ob = &compar_outputs[b*DROUT_LEN];
+	int c0 = ob[DROUT_USR] - oa[DROUT_USR];
+	if (c0 != 0) return c0;
+	return drout_compar(oa, ob);
+}
+
 
 static void emit_function(uint32_t function_id)
 {
@@ -1082,34 +1133,28 @@ static void emit_function(uint32_t function_id)
 		struct zvm_function* fn = resolve_function_id(function_id);
 
 		const int n_drains = fn->n_drains;
-		uint32_t drain_queue_p = buftop();
-		int drain_queue_i = 0;
-		int drain_queue_n = 0;
-		(void)zvm_arradd(ZVM_PRG->buf, n_drains);
-
 		const int n_outputs = fn->n_outputs;
-		uint32_t output_queue_p = buftop();
-		int output_queue_i = 0;
-		int output_queue_n = 0;
-		(void)zvm_arradd(ZVM_PRG->buf, n_outputs);
+		uint32_t queue_p = buftop();
+		const int queue_sz = n_drains+n_outputs;
+		(void)zvm_arradd(ZVM_PRG->buf, queue_sz);
+		int queue_i = 0;
+		int queue_n = 0;
 
 		{
-			uint32_t* drain_queue = bufp(drain_queue_p);
+			uint32_t* queue = bufp(queue_p);
 			for (int i = 0; i < n_drains; i++) {
 				uint32_t* drain = bufp(fn->drains_p + i*DROUT_LEN);
 				if (drain[DROUT_COUNTER] == 0) {
-					drain_queue[drain_queue_n++] = i;
+					queue[queue_n++] = ENCODE_DRAIN(i);
 				}
-			}
-		}
 
-		{
-			uint32_t* output_queue = bufp(output_queue_p);
+			}
+
 			clear_node_visit_set(mod);
 			for (int i = 0; i < n_outputs; i++) {
 				uint32_t* output = bufp(fn->outputs_p + i*DROUT_LEN);
 				if (output[DROUT_COUNTER] == 0) {
-					output_queue[output_queue_n++] = i;
+					queue[queue_n++] = ENCODE_OUTPUT(i);
 				}
 
 				// mark instance output nodes in visit set; this makes
@@ -1125,6 +1170,169 @@ static void emit_function(uint32_t function_id)
 			pairs[(i << 1) + 1] = ZVM_NIL_ID;
 		}
 
+		while (queue_i < queue_n) {
+
+			uint32_t* queue = bufp(queue_p);
+
+			int has_drains = 0;
+			int has_outputs = 0;
+			for (int i = queue_i; i < queue_n; i++) {
+				uint32_t qv = queue[i];
+				if (IS_DRAIN(qv)) {
+					has_drains = 1;
+					break;
+				}
+				if (IS_OUTPUT(qv)) {
+					has_outputs = 1;
+				}
+			}
+
+			if (has_drains) {
+				// execute drains as long as they're available
+
+				qsort(&queue[queue_i], queue_n-queue_i, sizeof *queue, drain_output_compar);
+
+				for (; queue_i < queue_n; queue_i++) {
+					uint32_t qv = queue[queue_i];
+
+					if (IS_OUTPUT(qv)) break;
+
+					const int drain_index = GET_VALUE(qv);
+					uint32_t* drain = bufp(fn->drains_p + drain_index*DROUT_LEN);
+
+					int n = drain[DROUT_DECR_LIST_N];
+					uint32_t p = drain[DROUT_DECR_LIST_P];
+					for (int i = 0; i < n; i++) {
+						const int output_index = *bufp(p+i);
+						uint32_t* output = bufp(fn->outputs_p + output_index*DROUT_LEN);
+						zvm_assert(output[DROUT_COUNTER] > 0);
+						output[DROUT_COUNTER]--;
+						if (output[DROUT_COUNTER] == 0) {
+							queue[queue_n++] = ENCODE_OUTPUT(output_index);
+						}
+					}
+				}
+				continue;
+			}
+
+			zvm_assert(!has_drains && has_outputs);
+
+			// now there are only outputs in the [queue_i;queue_n]
+			// interval.
+
+			compar_outputs = bufp(fn->outputs_p);
+			qsort(&queue[queue_i], queue_n-queue_i, sizeof *queue, queue_output_pi_compar);
+
+			// look for full calls ...
+			int n_full_calls = 0;
+			for (int i = queue_i; i < queue_n; ) {
+				// find interval of instance (share same p value)
+				int i0 = i;
+				uint32_t p0 = ZVM_NIL_P;
+				for (; i < queue_n; i++) {
+					uint32_t qv = queue[i];
+					zvm_assert(IS_OUTPUT(qv));
+					uint32_t* output = bufp(fn->outputs_p + GET_VALUE(qv)*DROUT_LEN);
+					uint32_t p = output[DROUT_P];
+					if (p0 != ZVM_NIL_P && p != p0) {
+						break;
+					}
+					p0 = p;
+				}
+				int i1 = i;
+
+				zvm_assert(p0 != ZVM_NIL_P);
+
+				uint32_t code = *bufp(p0);
+				int op = code & ZVM_OP_MASK;
+				zvm_assert(op == ZVM_OP(INSTANCE));
+				int instance_module_id = code >> ZVM_OP_BITS;
+				zvm_assert(zvm__is_valid_module_id(instance_module_id));
+				struct zvm_module* instance_mod = &ZVM_PRG->modules[instance_module_id];
+
+				const int n_instance_outputs = instance_mod->n_outputs;
+				uint32_t* node_bs32 = get_node_output_bs32(mod);
+
+				// a call is "full" if the requested instance
+				// output set is identical to the sequence of
+				// output requests.  NOTE: a call can be "full"
+				// even if it's part of a function chain (i.e.
+				// when an instance is split into multiple
+				// functions) as long as it's the last call in
+				// the chain
+				int is_full_call = 1;
+				i = i0;
+				for (int j = 0; j < n_instance_outputs; j++) {
+					int node_index = get_node_index(mod, p0, j);
+					if (!bs32_test(node_bs32, node_index)) {
+						continue;
+					}
+
+					uint32_t* output = bufp(fn->outputs_p + GET_VALUE(queue[i++])*DROUT_LEN);
+					if (output[DROUT_INDEX] != j) {
+						is_full_call = 0;
+						break;
+					}
+				}
+
+				zvm_assert(!is_full_call || i == i1);
+
+				if (is_full_call) n_full_calls++;
+
+				for (i = i0; i < i1; i++) {
+					uint32_t* output = bufp(fn->outputs_p + GET_VALUE(queue[i++])*DROUT_LEN);
+					output[DROUT_USR] = is_full_call;
+				}
+			}
+
+			if (n_full_calls > 0) {
+				compar_outputs = bufp(fn->outputs_p);
+				qsort(&queue[queue_i], queue_n-queue_i, sizeof *queue, queue_output_full_compar);
+
+				#if 0
+				for (int i = queue_i; i < queue_n && n_full_calls > 0; i++) {
+					int i0 = i;
+					uint32_t p0 = ZVM_NIL_P;
+					for (; i < queue_n; i++) {
+						uint32_t qv = queue[i];
+						zvm_assert(IS_OUTPUT(qv));
+						uint32_t* output = bufp(fn->outputs_p + GET_VALUE(qv)*DROUT_LEN);
+						uint32_t p = output[DROUT_P];
+						if (p0 != ZVM_NIL_P && p != p0) {
+							break;
+						}
+						p0 = p;
+					}
+					int i1 = i;
+
+					ack_instance_function(
+						function_id,
+						p0,
+						i0,
+						i1-i0,
+						prev_function_id,
+						queue_p,
+						&queue_n);
+
+				}
+
+
+				while (n_full_calls > 0) {
+					n_full_calls--;
+				}
+				#endif
+
+
+			} else {
+				// TODO just pick the first partial call
+			}
+
+		}
+
+		zvm_assert(queue_i == queue_sz);
+		zvm_assert(queue_n == queue_sz);
+
+		#if 0
 		for (;;) {
 			// be careful not to access after push on buf?
 			while (drain_queue_i < drain_queue_n) {
@@ -1287,6 +1495,7 @@ static void emit_function(uint32_t function_id)
 
 			break; // XXX
 		}
+		#endif
 
 		#if 0
 		zvm_assert(drain_queue_i == drain_queue_n);
