@@ -1280,7 +1280,7 @@ static void emit_function(uint32_t function_id)
 				if (is_full_call) n_full_calls++;
 
 				for (i = i0; i < i1; i++) {
-					uint32_t* output = bufp(fn->outputs_p + GET_VALUE(queue[i++])*DROUT_LEN);
+					uint32_t* output = bufp(fn->outputs_p + GET_VALUE(queue[i])*DROUT_LEN);
 					output[DROUT_USR] = is_full_call;
 				}
 			}
