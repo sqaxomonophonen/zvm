@@ -879,7 +879,7 @@ static int ack_instance_function(uint32_t parent_function_id, uint32_t p, uint32
 			zvm_assert(drain[DROUT_COUNTER] > 0 && "decrement when zero not expected");
 			drain[DROUT_COUNTER]--;
 			if (drain[DROUT_COUNTER] == 0) {
-				*bufp(queue_p + (*(queue_np)++)) = ENCODE_DRAIN(drain_index);
+				*bufp(queue_p + ((*queue_np)++)) = ENCODE_DRAIN(drain_index);
 			}
 		}
 	}
