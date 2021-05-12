@@ -1135,16 +1135,17 @@ static void emit_function(uint32_t function_id)
 		}
 	}
 
-	int new_function_id_0 = zvm_arrlen(ZVM_PRG->functions);
+	int new_function_ids_begin = zvm_arrlen(ZVM_PRG->functions);
+
+	const int n_drains = resolve_function_id(function_id)->n_drains;
+	const int n_outputs = resolve_function_id(function_id)->n_outputs;
+	const int queue_sz = n_drains+n_outputs;
+	uint32_t queue_p = buftop();
+	(void)zvm_arradd(ZVM_PRG->buf, queue_sz);
 
 	{
 		struct zvm_function* fn = resolve_function_id(function_id);
 
-		const int n_drains = fn->n_drains;
-		const int n_outputs = fn->n_outputs;
-		uint32_t queue_p = buftop();
-		const int queue_sz = n_drains+n_outputs;
-		(void)zvm_arradd(ZVM_PRG->buf, queue_sz);
 		int queue_i = 0;
 		int queue_n = 0;
 
@@ -1350,38 +1351,30 @@ static void emit_function(uint32_t function_id)
 		zvm_assert(queue_n == queue_sz);
 	}
 
-	int new_function_id_1 = zvm_arrlen(ZVM_PRG->functions);
-
 	// emit new functions created by ack_instance_function()
-	for (int new_function_id = new_function_id_0; new_function_id < new_function_id_1; new_function_id++) {
+	int new_function_ids_end = zvm_arrlen(ZVM_PRG->functions);
+	for (int new_function_id = new_function_ids_begin; new_function_id < new_function_ids_end; new_function_id++) {
 		emit_function(new_function_id);
 	}
 
-	#if 0
-	#ifdef VERBOSE_DEBUG
-	struct zvm_function* fn = resolve_function_id(function_id);
-	printf("\n");
-	for (int i = 0; i < fn->n_drains; i++) {
-		uint32_t* drain = bufp(fn->drains_p + i*DROUT_LEN);
-		printf("drain %d: p=%d index=%d counter=%d decr_list_n=%d decr_list_p=%d decr_list=[", i, drain[DROUT_P], drain[DROUT_INDEX], drain[DROUT_COUNTER], drain[DROUT_DECR_LIST_N], drain[DROUT_DECR_LIST_P]);
-		for (int j = 0; j < drain[DROUT_DECR_LIST_N]; j++) {
-			printf("%s%d", j == 0 ? "" : " ", *bufp(drain[DROUT_DECR_LIST_P]+j));
+	{
+		#if 0
+		printf("plan:");
+		uint32_t* queue = bufp(queue_p);
+		for (int i = 0; i < queue_sz; i++) {
+			uint32_t qv = queue[i];
+			uint32_t v = GET_VALUE(qv);
+			if (IS_DRAIN(qv)) {
+				printf(" d:%d", v);
+			} else if (IS_OUTPUT(qv)) {
+				printf(" o:%d", v);
+			} else {
+				zvm_assert(!"unreachable");
+			}
 		}
-		printf("]\n");
+		printf("\n");
+		#endif
 	}
-
-	printf("\n");
-	for (int i = 0; i < fn->n_outputs; i++) {
-		struct zvm_function* fn = resolve_function_id(function_id);
-		uint32_t* output = bufp(fn->outputs_p + i*DROUT_LEN);
-		printf("output %d: p=%d index=%d counter=%d decr_list_n=%d decr_list_p=%d decr_list=[", i, output[DROUT_P], output[DROUT_INDEX], output[DROUT_COUNTER], output[DROUT_DECR_LIST_N], output[DROUT_DECR_LIST_P]);
-		for (int j = 0; j < output[DROUT_DECR_LIST_N]; j++) {
-			printf("%s%d", j == 0 ? "" : " ", *bufp(output[DROUT_DECR_LIST_P]+j));
-		}
-		printf("]\n");
-	}
-	#endif
-	#endif
 
 }
 
@@ -1410,7 +1403,29 @@ void zvm_end_program(uint32_t main_module_id)
 
 	#ifdef VERBOSE_DEBUG
 	printf("=======================================\n");
-	printf("n_functions:               %d\n", zvm_arrlen(ZVM_PRG->functions));
+	const int n_functions = zvm_arrlen(ZVM_PRG->functions);
+	printf("n_functions:               %d\n", n_functions);
+	for (int i = 0; i < n_functions; i++) {
+		struct zvm_fnkey* key = &ZVM_PRG->functions[i].key;
+		printf("   F[%d] :: module_id=%d", i , key->module_id);
+
+		printf(" prev_function_id=");
+		if (key->prev_function_id == ZVM_NIL_ID) {
+			printf("<nil>");
+		} else {
+			printf("%d", key->prev_function_id);
+		}
+
+		const int drain_request_sz = get_module_drain_request_sz(&ZVM_PRG->modules[key->module_id]);
+
+		printf(" full=");
+		bs32_print(drain_request_sz, bufp(key->full_drain_request_bs32_p));
+
+		printf(" this=");
+		bs32_print(drain_request_sz, bufp(key->drain_request_bs32_p));
+
+		printf("\n");
+	}
 	printf("buf sz after end program:  %d\n", buf_sz_after_end_program);
 	printf("buf sz after compile:      %d\n", buf_sz_after_compile);
 	printf("=======================================\n");
