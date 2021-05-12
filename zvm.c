@@ -816,12 +816,19 @@ static int queue_output_full_compar(const void* va, const void* vb)
 	return drout_compar(oa, ob);
 }
 
-static int queue_output_get_pspan_length(uint32_t outputs_p, uint32_t* queue, int n)
+static int queue_output_get_pspan_length(uint32_t outputs_p, uint32_t* queue, int n, int break_on_drain)
 {
 	uint32_t p0 = ZVM_NIL_P;
 	for (int i = 0; i < n; i++) {
 		uint32_t qv = queue[i];
-		zvm_assert(IS_OUTPUT(qv));
+		int is_output = IS_OUTPUT(qv);
+		if (break_on_drain) {
+			if (!is_output) {
+				return i;
+			}
+		} else {
+			zvm_assert(is_output);
+		}
 		uint32_t* output = bufp(outputs_p + GET_VALUE(qv)*DROUT_LEN);
 		uint32_t p = output[DROUT_P];
 		if (p0 == ZVM_NIL_P) {
@@ -1243,7 +1250,7 @@ static void emit_function(uint32_t function_id)
 			// look for full calls ...
 			int n_full_calls = 0;
 			for (int i = queue_i; i < queue_n; ) {
-				int pspan_length = queue_output_get_pspan_length(fn->outputs_p, &queue[i], queue_n-i);
+				int pspan_length = queue_output_get_pspan_length(fn->outputs_p, &queue[i], queue_n-i, 0);
 
 				uint32_t p0 = bufp(fn->outputs_p + GET_VALUE(queue[i])*DROUT_LEN)[DROUT_P];
 				uint32_t code = *bufp(p0);
@@ -1301,7 +1308,7 @@ static void emit_function(uint32_t function_id)
 					// both buf and the functions array, so
 					// these pointers may not be valid
 					// after the call
-					int pspan_length = queue_output_get_pspan_length(fn->outputs_p, &queue[queue_i], queue_n0-queue_i);
+					int pspan_length = queue_output_get_pspan_length(fn->outputs_p, &queue[queue_i], queue_n0-queue_i, 0);
 
 					uint32_t p0 = bufp(fn->outputs_p + GET_VALUE(queue[queue_i])*DROUT_LEN)[DROUT_P];
 					uint32_t prev_function_id = instance_u32_map_get(mod, p0);
@@ -1334,7 +1341,7 @@ static void emit_function(uint32_t function_id)
 				// to pick the first partial call and continue
 				// :)
 
-				int pspan_length = queue_output_get_pspan_length(fn->outputs_p, &queue[queue_i], queue_n-queue_i);
+				int pspan_length = queue_output_get_pspan_length(fn->outputs_p, &queue[queue_i], queue_n-queue_i, 0);
 				uint32_t p0 = bufp(fn->outputs_p + GET_VALUE(queue[queue_i])*DROUT_LEN)[DROUT_P];
 				uint32_t prev_function_id = instance_u32_map_get(mod, p0);
 				ack_instance_function(
@@ -1363,20 +1370,30 @@ static void emit_function(uint32_t function_id)
 	}
 
 	#if 0
+	#ifdef VERBOSE_DEBUG
 	uint32_t* queue = bufp(queue_p);
+	printf("PLAN (function %d)\n", function_id);
 	struct zvm_function* fn = resolve_function_id(function_id);
 	for (int i = 0; i < queue_sz; ) {
 		uint32_t qv = queue[i];
 		uint32_t v = GET_VALUE(qv);
 		if (IS_DRAIN(qv)) {
+			printf("  DRAIN %d\n", v);
 			i++;
 		} else if (IS_OUTPUT(qv)) {
-			int pspan_length = queue_output_get_pspan_length(fn->outputs_p, &queue[queue_i], queue_n-queue_i);
+			int pspan_length = queue_output_get_pspan_length(fn->outputs_p, &queue[i], queue_sz - i, 1);
+			printf("  OUTPUT");
+			for (int j = 0; j < pspan_length; j++) {
+				printf(" %d", GET_VALUE(queue[i+j]));
+			}
+			printf("\n");
 			i += pspan_length;
 		} else {
 			zvm_assert(!"unreachable");
 		}
 	}
+	printf("ENDPLAN\n\n");
+	#endif
 	#endif
 
 }
