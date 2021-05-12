@@ -1231,10 +1231,14 @@ static void emit_function(uint32_t function_id)
 			compar_outputs = bufp(fn->outputs_p);
 			qsort(&queue[queue_i], queue_n-queue_i, sizeof *queue, queue_output_pi_compar);
 
+			#if 0
+			for (int i = queue_i; i < queue_n; i++) zvm_assert(IS_OUTPUT(queue[i]));
+			#endif
+
 			// look for full calls ...
 			int n_full_calls = 0;
 			for (int i = queue_i; i < queue_n; ) {
-				int pspan_length = queue_output_get_pspan_length(fn->outputs_p, &queue[i], queue_n-queue_i);
+				int pspan_length = queue_output_get_pspan_length(fn->outputs_p, &queue[i], queue_n-i);
 
 				uint32_t p0 = bufp(fn->outputs_p + GET_VALUE(queue[i])*DROUT_LEN)[DROUT_P];
 				uint32_t code = *bufp(p0);
@@ -1286,13 +1290,14 @@ static void emit_function(uint32_t function_id)
 					qsort(&queue[queue_i], queue_n-queue_i, sizeof *queue, queue_output_full_compar);
 				}
 
-				while (n_full_calls > 0 && queue_i < queue_n) {
+				int queue_n0 = queue_n;
+				while (n_full_calls > 0 && queue_i < queue_n0) {
 					// NOTE important pointer fetch;
 					// ack_instance_function() modifies
 					// buf, so the queue ptr may not be
 					// valid after the call
 					uint32_t* queue = bufp(queue_p); 
-					int pspan_length = queue_output_get_pspan_length(fn->outputs_p, &queue[queue_i], queue_n-queue_i);
+					int pspan_length = queue_output_get_pspan_length(fn->outputs_p, &queue[queue_i], queue_n0-queue_i);
 
 					uint32_t p0 = bufp(fn->outputs_p + GET_VALUE(queue[queue_i])*DROUT_LEN)[DROUT_P];
 					uint32_t prev_function_id = instance_u32_map_get(mod, p0);
