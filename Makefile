@@ -1,5 +1,5 @@
-OPT=-O2
-#OPT=-O0 -g
+#OPT=-O2
+OPT=-O0 -g
 CFLAGS=-std=c99 -Wall $(OPT) -DDEBUG -DVERBOSE_DEBUG
 
 bin=t1zvm
