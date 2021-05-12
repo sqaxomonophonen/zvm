@@ -916,6 +916,23 @@ static int queue_output_full_compar(const void* va, const void* vb)
 	return drout_compar(oa, ob);
 }
 
+static int queue_output_get_pspan_length(uint32_t outputs_p, uint32_t* queue, int n)
+{
+	uint32_t p0 = ZVM_NIL_P;
+	for (int i = 0; i < n; i++) {
+		uint32_t qv = queue[i];
+		zvm_assert(IS_OUTPUT(qv));
+		uint32_t* output = bufp(outputs_p + GET_VALUE(qv)*DROUT_LEN);
+		uint32_t p = output[DROUT_P];
+		if (p0 == ZVM_NIL_P) {
+			p0 = p;
+		} else if (p != p0) {
+			return i;
+		}
+	}
+	return n;
+}
+
 
 static void emit_function(uint32_t function_id)
 {
@@ -1226,23 +1243,9 @@ static void emit_function(uint32_t function_id)
 			// look for full calls ...
 			int n_full_calls = 0;
 			for (int i = queue_i; i < queue_n; ) {
-				// find interval of instance (share same p value)
-				int i0 = i;
-				uint32_t p0 = ZVM_NIL_P;
-				for (; i < queue_n; i++) {
-					uint32_t qv = queue[i];
-					zvm_assert(IS_OUTPUT(qv));
-					uint32_t* output = bufp(fn->outputs_p + GET_VALUE(qv)*DROUT_LEN);
-					uint32_t p = output[DROUT_P];
-					if (p0 != ZVM_NIL_P && p != p0) {
-						break;
-					}
-					p0 = p;
-				}
-				int i1 = i;
+				int pspan_length = queue_output_get_pspan_length(fn->outputs_p, &queue[i], queue_n-queue_i);
 
-				zvm_assert(p0 != ZVM_NIL_P);
-
+				uint32_t p0 = bufp(fn->outputs_p + GET_VALUE(queue[i])*DROUT_LEN)[DROUT_P];
 				uint32_t code = *bufp(p0);
 				int op = code & ZVM_OP_MASK;
 				zvm_assert(op == ZVM_OP(INSTANCE));
@@ -1261,33 +1264,33 @@ static void emit_function(uint32_t function_id)
 				// functions) as long as it's the last call in
 				// the chain
 				int is_full_call = 1;
-				i = i0;
 				for (int j = 0; j < n_instance_outputs; j++) {
 					int node_index = get_node_index(mod, p0, j);
 					if (!bs32_test(node_bs32, node_index)) {
 						continue;
 					}
 
-					uint32_t* output = bufp(fn->outputs_p + GET_VALUE(queue[i++])*DROUT_LEN);
+					uint32_t* output = bufp(fn->outputs_p + GET_VALUE(queue[i+j])*DROUT_LEN);
 					if (output[DROUT_INDEX] != j) {
 						is_full_call = 0;
 						break;
 					}
 				}
 
-				zvm_assert(!is_full_call || i == i1);
-
 				if (is_full_call) n_full_calls++;
 
-				for (i = i0; i < i1; i++) {
-					uint32_t* output = bufp(fn->outputs_p + GET_VALUE(queue[i])*DROUT_LEN);
+				for (int j = 0; j < pspan_length; j++) {
+					uint32_t* output = bufp(fn->outputs_p + GET_VALUE(queue[i+j])*DROUT_LEN);
 					output[DROUT_USR] = is_full_call;
 				}
+
+				i += pspan_length;
 			}
 
 			if (n_full_calls > 0) {
 				compar_outputs = bufp(fn->outputs_p);
 				qsort(&queue[queue_i], queue_n-queue_i, sizeof *queue, queue_output_full_compar);
+
 
 				#if 0
 				for (int i = queue_i; i < queue_n && n_full_calls > 0; i++) {
