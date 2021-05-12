@@ -1369,6 +1369,16 @@ static void emit_function(uint32_t function_id)
 		emit_function(new_function_id);
 	}
 
+	// FIXME state in drain requests is not properly handled, I think?
+
+	// FIXME instance splitting is only done locally... i.e. new call
+	// chains are always created from scratch when an instance is first
+	// seen during emit_function(). rather, a call chain from a previous
+	// emit_function() may have to be continued if its parent
+	// emit_function() itself is part of a call chain?
+
+	// TODO code emission... soon?
+
 	#if 0
 	#ifdef VERBOSE_DEBUG
 	uint32_t* queue = bufp(queue_p);
