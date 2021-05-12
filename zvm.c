@@ -914,9 +914,7 @@ static int ack_instance_function(uint32_t parent_function_id, uint32_t p, uint32
 	if (!did_insert) {
 		// no insert; retract allocations
 		zvm_arrsetlen(ZVM_PRG->buf, buftop0);
-		printf("reused function id %d\n", instance_function_id); // XXX
 	} else {
-		printf("inserted function id %d\n", instance_function_id); // XXX
 	}
 
 	// set up potential chain by storing function id in instance->u32 map
@@ -1137,6 +1135,8 @@ static void emit_function(uint32_t function_id)
 		}
 	}
 
+	int new_function_id_0 = zvm_arrlen(ZVM_PRG->functions);
+
 	{
 		struct zvm_function* fn = resolve_function_id(function_id);
 
@@ -1350,6 +1350,13 @@ static void emit_function(uint32_t function_id)
 		zvm_assert(queue_n == queue_sz);
 	}
 
+	int new_function_id_1 = zvm_arrlen(ZVM_PRG->functions);
+
+	// emit new functions created by ack_instance_function()
+	for (int new_function_id = new_function_id_0; new_function_id < new_function_id_1; new_function_id++) {
+		emit_function(new_function_id);
+	}
+
 	#if 0
 	#ifdef VERBOSE_DEBUG
 	struct zvm_function* fn = resolve_function_id(function_id);
@@ -1380,6 +1387,8 @@ static void emit_function(uint32_t function_id)
 
 void zvm_end_program(uint32_t main_module_id)
 {
+	int buf_sz_after_end_program = buftop();
+
 	ZVM_PRG->main_module_id = main_module_id;
 	struct zvm_module* mod = &ZVM_PRG->modules[main_module_id];
 
@@ -1396,4 +1405,14 @@ void zvm_end_program(uint32_t main_module_id)
 	bs32_fill(drain_request_sz, bufp(main_key.drain_request_bs32_p), 1);
 
 	emit_function(ZVM_PRG->main_function_id = produce_fnkey_function_id(&main_key, NULL));
+
+	int buf_sz_after_compile = buftop();
+
+	#ifdef VERBOSE_DEBUG
+	printf("=======================================\n");
+	printf("n_functions:               %d\n", zvm_arrlen(ZVM_PRG->functions));
+	printf("buf sz after end program:  %d\n", buf_sz_after_end_program);
+	printf("buf sz after compile:      %d\n", buf_sz_after_compile);
+	printf("=======================================\n");
+	#endif
 }
