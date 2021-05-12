@@ -939,6 +939,7 @@ static void emit_function(uint32_t function_id)
 	struct zvm_fnkey fnkey = resolve_function_id(function_id)->key;
 	struct zvm_module* mod = &ZVM_PRG->modules[fnkey.module_id];
 
+	#if 0
 	// calculate future drain request set, which is the full drain request
 	// minus the chain of drain requests
 	const int drain_request_sz = get_module_drain_request_sz(mod);
@@ -954,6 +955,7 @@ static void emit_function(uint32_t function_id)
 			fk = &ZVM_PRG->functions[fk->prev_function_id].key;
 		}
 	}
+	#endif
 
 	clear_node_visit_set(mod);
 
@@ -964,6 +966,10 @@ static void emit_function(uint32_t function_id)
 		fn->drains_p = buftop();
 
 		for (int output_index = 0; output_index < mod->n_outputs; output_index++) {
+			// XXX trace if in full drain request too? a child
+			// instance's full drain request should reflect its
+			// parent's full drain request (not the "non-full"
+			// drain request
 			if (!drain_request_output_test(fnkey.drain_request_bs32_p, output_index)) {
 				continue;
 			}
@@ -971,6 +977,10 @@ static void emit_function(uint32_t function_id)
 		}
 
 		if (drain_request_state_test(fn->key.drain_request_bs32_p)) {
+			// XXX trace if in full drain request too? a child
+			// instance's full drain request should reflect its
+			// parent's full drain request (not the "non-full"
+			// drain request
 			uint32_t p = mod->code_begin_p;
 			const uint32_t p_end = mod->code_end_p;
 			while (p < p_end) {
@@ -1052,6 +1062,9 @@ static void emit_function(uint32_t function_id)
 			fn->n_outputs++;
 			push_drout(p, node_output[1]);
 		}
+
+		// TODO also insert state "output" requests? i.e. having a
+		// DROUT_INDEX of ZVM_NIL_ID
 	}
 
 	// initialize counters and decrement lists
