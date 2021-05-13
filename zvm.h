@@ -90,8 +90,8 @@ struct zvm_module {
 
 struct zvm_fnkey {
 	uint32_t module_id;
-	uint32_t full_drain_request_bs32_p;
-	uint32_t drain_request_bs32_p;
+	uint32_t full_outcome_request_bs32_p;
+	uint32_t outcome_request_bs32_p;
 	uint32_t prev_function_id;
 };
 
@@ -104,8 +104,8 @@ struct zvm_function {
 	struct zvm_fnkey key;
 	int n_drains;
 	uint32_t drains_p;
-	int n_outputs;
-	uint32_t outputs_p;
+	int n_outcomes;
+	uint32_t outcomes_p;
 };
 
 struct zvm_program {
