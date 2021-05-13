@@ -778,7 +778,7 @@ static void drain_to_output_instance_output_visitor_write(struct tracer* tr, uin
 #define IS_DRAIN(v)        (((v)&0x80000000)==0)
 #define IS_OUTCOME(v)      !IS_DRAIN(v)
 
-static int drain_output_compar(const void* va, const void* vb)
+static int drain_outcome_compar(const void* va, const void* vb)
 {
 	uint32_t a = *(uint32_t*)va;
 	uint32_t b = *(uint32_t*)vb;
@@ -1228,7 +1228,7 @@ static void emit_function(uint32_t function_id)
 			if (has_drains) {
 				// execute drains as long as they're available
 
-				qsort(&queue[queue_i], queue_n-queue_i, sizeof *queue, drain_output_compar);
+				qsort(&queue[queue_i], queue_n-queue_i, sizeof *queue, drain_outcome_compar);
 
 				for (; queue_i < queue_n; queue_i++) {
 					uint32_t qv = queue[queue_i];
