@@ -953,6 +953,8 @@ static void emit_function(uint32_t function_id)
 	struct zvm_fnkey fnkey = resolve_function_id(function_id)->key;
 	struct zvm_module* mod = &ZVM_PRG->modules[fnkey.module_id];
 
+	int request_state = outcome_request_state_test(fnkey.outcome_request_bs32_p);
+
 	#if 0
 	// calculate future outcome request set, which is the full outcome request
 	// minus the chain of outcome requests
@@ -986,7 +988,7 @@ static void emit_function(uint32_t function_id)
 			add_drain(function_id, ZVM_NIL_P, output_index);
 		}
 
-		if (outcome_request_state_test(fnkey.outcome_request_bs32_p)) {
+		if (request_state) {
 			uint32_t p = mod->code_begin_p;
 			const uint32_t p_end = mod->code_end_p;
 			while (p < p_end) {
@@ -1074,30 +1076,34 @@ static void emit_function(uint32_t function_id)
 			push_drout(p, node_output[1]);
 		}
 
-		// add state outcome requests
-		uint32_t p = mod->code_begin_p;
-		const uint32_t p_end = mod->code_end_p;
-		while (p < p_end) {
-			uint32_t code = *bufp(p);
-			int op = code & ZVM_OP_MASK;
-			if (op == ZVM_OP(INSTANCE)) {
-				int module_id = code >> ZVM_OP_BITS;
-				zvm_assert(zvm__is_valid_module_id(module_id));
-				struct zvm_module* mod2 = &ZVM_PRG->modules[module_id];
-				if (module_has_state(mod2)) {
-					fn->n_outcomes++;
-					push_drout(p, ZVM_NIL_ID);
+		if (request_state) {
+			// add state outcome requests
+			uint32_t p = mod->code_begin_p;
+			const uint32_t p_end = mod->code_end_p;
+			while (p < p_end) {
+				uint32_t code = *bufp(p);
+				int op = code & ZVM_OP_MASK;
+				if (op == ZVM_OP(INSTANCE)) {
+					int module_id = code >> ZVM_OP_BITS;
+					zvm_assert(zvm__is_valid_module_id(module_id));
+					struct zvm_module* mod2 = &ZVM_PRG->modules[module_id];
+					if (module_has_state(mod2)) {
+						fn->n_outcomes++;
+						push_drout(p, ZVM_NIL_ID);
+					}
 				}
+				p += get_op_length(p);
 			}
-			p += get_op_length(p);
-		}
-		zvm_assert(p == p_end);
+			zvm_assert(p == p_end);
 
-		qsort(
-			bufp(fn->outcomes_p),
-			fn->n_outcomes,
-			DROUT_SZ,
-			drout_compar);
+			// NOTE: assumption here that drouts only require
+			// sorting when request_state is true
+			qsort(
+				bufp(fn->outcomes_p),
+				fn->n_outcomes,
+				DROUT_SZ,
+				drout_compar);
+		}
 	}
 
 	// initialize counters and decrement lists
