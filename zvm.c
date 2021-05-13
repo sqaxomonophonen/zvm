@@ -980,21 +980,13 @@ static void emit_function(uint32_t function_id)
 		fn->drains_p = buftop();
 
 		for (int output_index = 0; output_index < mod->n_outputs; output_index++) {
-			// XXX trace if in full outcome request too? a child
-			// instance's full outcome request should reflect its
-			// parent's full outcome request (not the "non-full"
-			// outcome request
 			if (!outcome_request_output_test(fnkey.outcome_request_bs32_p, output_index)) {
 				continue;
 			}
 			add_drain(function_id, ZVM_NIL_P, output_index);
 		}
 
-		if (outcome_request_state_test(fn->key.outcome_request_bs32_p)) {
-			// XXX trace if in full outcome request too? a child
-			// instance's full outcome request should reflect its
-			// parent's full outcome request (not the "non-full"
-			// outcome request
+		if (outcome_request_state_test(fnkey.outcome_request_bs32_p)) {
 			uint32_t p = mod->code_begin_p;
 			const uint32_t p_end = mod->code_end_p;
 			while (p < p_end) {
@@ -1006,9 +998,14 @@ static void emit_function(uint32_t function_id)
 					int module_id = code >> ZVM_OP_BITS;
 					zvm_assert(zvm__is_valid_module_id(module_id));
 					struct zvm_module* mod2 = &ZVM_PRG->modules[module_id];
-					int n_inputs = mod2->n_inputs;
-					for (int i = 0; i < n_inputs; i++) {
-						add_drain(function_id, p, i);
+					if (module_has_state(mod2)) {
+						int n_inputs = mod2->n_inputs;
+						uint32_t* ibs = get_state_input_dep_bs32(mod2);
+						for (int i = 0; i < n_inputs; i++) {
+							if (bs32_test(ibs, i)) {
+								add_drain(function_id, p, i);
+							}
+						}
 					}
 				}
 				p += get_op_length(p);
