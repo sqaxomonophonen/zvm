@@ -915,11 +915,11 @@ static int ack_instance_function(uint32_t parent_function_id, uint32_t p, uint32
 		uint32_t* node_bs32 = get_node_output_bs32(parent_mod);
 		for (int i = 0; i < instance_mod->n_outputs; i++) {
 			int node_index = get_node_index(parent_mod, p, i);
-			zvm_assert((bs32_test(node_bs32, node_index) == outcome_request_output_test(key.full_outcome_request_bs32_p, i)) && "unexpected full drain request pattern");
+			zvm_assert((bs32_test(node_bs32, node_index) == outcome_request_output_test(key.full_outcome_request_bs32_p, i)) && "unexpected full outcome request pattern");
 		}
 		#endif
 	} else {
-		// use node visit set to produce full drain request
+		// use node visit set to produce full outcome request
 		key.full_outcome_request_bs32_p = bs32_alloc(outcome_request_sz);
 		uint32_t* node_bs32 = get_node_output_bs32(parent_mod);
 		for (int i = 0; i < instance_mod->n_outputs; i++) {
@@ -954,8 +954,8 @@ static void emit_function(uint32_t function_id)
 	struct zvm_module* mod = &ZVM_PRG->modules[fnkey.module_id];
 
 	#if 0
-	// calculate future drain request set, which is the full drain request
-	// minus the chain of drain requests
+	// calculate future outcome request set, which is the full outcome request
+	// minus the chain of outcome requests
 	const int outcome_request_sz = get_module_outcome_request_sz(mod);
 	uint32_t future_outcome_request_p = bs32_alloc(outcome_request_sz);
 	bs32_copy(outcome_request_sz, bufp(future_outcome_request_p), bufp(fnkey.full_outcome_request_bs32_p));
@@ -980,10 +980,10 @@ static void emit_function(uint32_t function_id)
 		fn->drains_p = buftop();
 
 		for (int output_index = 0; output_index < mod->n_outputs; output_index++) {
-			// XXX trace if in full drain request too? a child
-			// instance's full drain request should reflect its
-			// parent's full drain request (not the "non-full"
-			// drain request
+			// XXX trace if in full outcome request too? a child
+			// instance's full outcome request should reflect its
+			// parent's full outcome request (not the "non-full"
+			// outcome request
 			if (!outcome_request_output_test(fnkey.outcome_request_bs32_p, output_index)) {
 				continue;
 			}
@@ -991,10 +991,10 @@ static void emit_function(uint32_t function_id)
 		}
 
 		if (outcome_request_state_test(fn->key.outcome_request_bs32_p)) {
-			// XXX trace if in full drain request too? a child
-			// instance's full drain request should reflect its
-			// parent's full drain request (not the "non-full"
-			// drain request
+			// XXX trace if in full outcome request too? a child
+			// instance's full outcome request should reflect its
+			// parent's full outcome request (not the "non-full"
+			// outcome request
 			uint32_t p = mod->code_begin_p;
 			const uint32_t p_end = mod->code_end_p;
 			while (p < p_end) {
@@ -1231,7 +1231,7 @@ static void emit_function(uint32_t function_id)
 				uint32_t index = outcome[DROUT_INDEX];
 				if (index != ZVM_NIL_ID) {
 					// mark instance outcome nodes in visit set; this makes
-					// it easy to extract the "full drain request" of an
+					// it easy to extract the "full outcome request" of an
 					// instance
 					visit_node(mod, outcome[DROUT_P], index);
 				}
@@ -1442,7 +1442,7 @@ static void emit_function(uint32_t function_id)
 		emit_function(new_function_id);
 	}
 
-	// FIXME state in drain requests is not properly handled, I think?
+	// FIXME state in outcome requests is not properly handled, I think?
 
 	// FIXME instance splitting is only done locally... i.e. new call
 	// chains are always created from scratch when an instance is first
