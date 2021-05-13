@@ -53,6 +53,11 @@ static inline int get_module_outcome_request_sz(struct zvm_module* mod)
 	return n_state_bits + n_output_bits;
 }
 
+static inline int module_has_state(struct zvm_module* mod)
+{
+	return mod->n_bits > 0;
+}
+
 void zvm_init()
 {
 	zvm_assert(ZVM_OP_N <= ZVM_OP_MASK);
@@ -207,6 +212,15 @@ static uint32_t* get_output_input_dep_bs32(struct zvm_module* mod, int output_in
 {
 	assert(0 <= output_index && output_index < mod->n_outputs);
 	return get_input_bs32(mod, 1+output_index);
+}
+
+static uint32_t* get_outcome_index_input_dep_bs32(struct zvm_module* mod, uint32_t outcome_index)
+{
+	if (outcome_index == ZVM_NIL_ID) {
+		return get_state_input_dep_bs32(mod);
+	} else {
+		return get_output_input_dep_bs32(mod, outcome_index);
+	}
 }
 
 static int get_op_length(uint32_t p)
@@ -872,9 +886,6 @@ static int ack_instance_function(uint32_t parent_function_id, uint32_t p, uint32
 		zvm_assert(outcome[DROUT_P] == p);
 		uint32_t index = outcome[DROUT_INDEX];
 		if (index == ZVM_NIL_ID) {
-			// XXX currently not implemented elsewhere? is this how
-			// I want to do it? have a "nil index outcome request"
-			// signify state request?
 			outcome_request_state_set(key.outcome_request_bs32_p);
 		} else {
 			outcome_request_output_set(key.outcome_request_bs32_p, outcome[DROUT_INDEX]);
@@ -1066,8 +1077,30 @@ static void emit_function(uint32_t function_id)
 			push_drout(p, node_output[1]);
 		}
 
-		// TODO also insert state "outcome" requests? i.e. having a
-		// DROUT_INDEX of ZVM_NIL_ID
+		// add state outcome requests
+		uint32_t p = mod->code_begin_p;
+		const uint32_t p_end = mod->code_end_p;
+		while (p < p_end) {
+			uint32_t code = *bufp(p);
+			int op = code & ZVM_OP_MASK;
+			if (op == ZVM_OP(INSTANCE)) {
+				int module_id = code >> ZVM_OP_BITS;
+				zvm_assert(zvm__is_valid_module_id(module_id));
+				struct zvm_module* mod2 = &ZVM_PRG->modules[module_id];
+				if (module_has_state(mod2)) {
+					fn->n_outcomes++;
+					push_drout(p, ZVM_NIL_ID);
+				}
+			}
+			p += get_op_length(p);
+		}
+		zvm_assert(p == p_end);
+
+		qsort(
+			bufp(fn->outcomes_p),
+			fn->n_outcomes,
+			DROUT_SZ,
+			drout_compar);
 	}
 
 	// initialize counters and decrement lists
@@ -1121,7 +1154,7 @@ static void emit_function(uint32_t function_id)
 			zvm_assert(zvm__is_valid_module_id(module_id));
 			struct zvm_module* mod2 = &ZVM_PRG->modules[module_id];
 
-			uint32_t* bs32 = get_output_input_dep_bs32(mod2, outcome[DROUT_INDEX]);
+			uint32_t* bs32 = get_outcome_index_input_dep_bs32(mod2, outcome[DROUT_INDEX]);
 			for (int j = 0; j < mod2->n_inputs; j++) {
 				if (!bs32_test(bs32, j)) {
 					continue;
@@ -1289,20 +1322,40 @@ static void emit_function(uint32_t function_id)
 				// functions) as long as it's the last call in
 				// the chain
 				int is_full_call = 1;
-				for (int j = 0; j < n_instance_outputs; j++) {
-					int node_index = get_node_index(mod, p0, j);
-					if (!bs32_test(node_bs32, node_index)) {
-						continue;
+				int ii = 0;
+				for (int j = 0; j < (n_instance_outputs+1); j++) {
+					const int is_output = (j < n_instance_outputs);
+					const int is_state  = (j == n_instance_outputs);
+
+					uint32_t expected_drout_index = 0;
+					if (is_output) {
+						int node_index = get_node_index(mod, p0, j);
+						if (!bs32_test(node_bs32, node_index)) {
+							continue;
+						}
+						expected_drout_index = j;
+					} else if (is_state) {
+						const int request_state = module_has_state(instance_mod);
+						if (!request_state) {
+							continue;
+						}
+						expected_drout_index = ZVM_NIL_ID;
+					} else {
+						zvm_assert(!"unreachable");
 					}
 
-					uint32_t* outcome = bufp(fn->outcomes_p + GET_VALUE(queue[i+j])*DROUT_LEN);
-					if (outcome[DROUT_INDEX] != j) {
+					uint32_t* outcome = bufp(fn->outcomes_p + GET_VALUE(queue[i + (ii++)])*DROUT_LEN);
+					zvm_assert(outcome[DROUT_P] == p0);
+					if (outcome[DROUT_INDEX] != expected_drout_index) {
 						is_full_call = 0;
 						break;
 					}
 				}
 
-				// TODO FIXME check for state outcome request too?
+				if (is_full_call) {
+					zvm_assert(ii == pspan_length);
+				}
+
 
 				if (is_full_call) n_full_calls++;
 
