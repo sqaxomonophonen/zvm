@@ -1215,31 +1215,34 @@ static void emit_function(uint32_t function_id)
 		int queue_i = 0;
 		int queue_n = 0;
 
-		{
-			for (int i = 0; i < n_drains; i++) {
-				uint32_t* drain = bufp(fn->drains_p + i*DROUT_LEN);
-				if (drain[DROUT_COUNTER] == 0) {
-					queue[queue_n++] = ENCODE_DRAIN(i);
-				}
-
+		for (int i = 0; i < n_drains; i++) {
+			uint32_t* drain = bufp(fn->drains_p + i*DROUT_LEN);
+			if (drain[DROUT_COUNTER] == 0) {
+				queue[queue_n++] = ENCODE_DRAIN(i);
 			}
 
-			clear_node_visit_set(mod);
-			for (int i = 0; i < n_outcomes; i++) {
-				uint32_t* outcome = bufp(fn->outcomes_p + i*DROUT_LEN);
-				if (outcome[DROUT_COUNTER] == 0) {
-					queue[queue_n++] = ENCODE_OUTCOME(i);
-				}
+		}
 
-				uint32_t index = outcome[DROUT_INDEX];
-				if (index != ZVM_NIL_ID) {
-					// mark instance outcome nodes in visit set; this makes
-					// it easy to extract the "full outcome request" of an
-					// instance
-					visit_node(mod, outcome[DROUT_P], index);
-				}
+		clear_node_visit_set(mod);
+
+		for (int i = 0; i < n_outcomes; i++) {
+			uint32_t* outcome = bufp(fn->outcomes_p + i*DROUT_LEN);
+			if (outcome[DROUT_COUNTER] == 0) {
+				queue[queue_n++] = ENCODE_OUTCOME(i);
+			}
+
+			uint32_t index = outcome[DROUT_INDEX];
+			if (index != ZVM_NIL_ID) {
+				// mark instance outcome nodes in visit set; this makes
+				// it easy to extract the "full outcome request" of an
+				// instance
+				visit_node(mod, outcome[DROUT_P], index);
 			}
 		}
+
+		// XXX FIXME - I also need a visit set representing the
+		// parent's full outcome request? i.e. I must trace back and
+		// find all outputs requested by the full request 
 
 		// set nil function id
 		uint32_t* pairs = bufp(mod->instance_u32_map_p);
