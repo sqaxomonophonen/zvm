@@ -78,6 +78,7 @@ struct zvm_module {
 	int n_node_outputs;
 	uint32_t node_outputs_p;
 	uint32_t node_output_bs32_p;
+	uint32_t node_output_aux_bs32_p;
 
 	uint32_t input_bs32s_p;
 

@@ -324,10 +324,10 @@ static void clear_node_visit_set(struct zvm_module* mod)
 	bs32_clear_all(mod->n_node_outputs, get_node_output_bs32(mod));
 }
 
-static int visit_node(struct zvm_module* mod, uint32_t p, uint32_t output_index)
+static int visit_node(struct zvm_module* mod, uint32_t p, uint32_t output_index, int use_aux_visit_set)
 {
 	int node_index = get_node_index(mod, p, output_index);
-	uint32_t* node_bs32 = get_node_output_bs32(mod);
+	uint32_t* node_bs32 = bufp(use_aux_visit_set ? mod->node_output_aux_bs32_p : mod->node_output_bs32_p);
 	if (bs32_test(node_bs32, node_index)) {
 		return 0;
 	} else {
@@ -338,6 +338,7 @@ static int visit_node(struct zvm_module* mod, uint32_t p, uint32_t output_index)
 
 struct tracer {
 	struct zvm_module* mod;
+	int use_aux_visit_set;
 	uint32_t function_id;
 
 	void(*module_input_visitor)(struct tracer*, uint32_t p);
@@ -377,7 +378,7 @@ static void trace(struct tracer* tr, uint32_t p)
 
 		int output_index = unpack_index >= 0 ? unpack_index : 0;
 
-		if (!visit_node(tr->mod, p, output_index)) {
+		if (!visit_node(tr->mod, p, output_index, tr->use_aux_visit_set)) {
 			return;
 		}
 
@@ -475,6 +476,13 @@ static void trace_state_deps(uint32_t* input_bs32, struct zvm_module* mod)
 	zvm_assert(p == p_end);
 }
 
+static uint32_t module_alloc_node_output_bs32(struct zvm_module* mod)
+{
+	uint32_t top = buftop();
+	(void)zvm_arradd(ZVM_PRG->buf, bs32_n_words(mod->n_node_outputs));
+	return top;
+}
+
 int zvm_end_module()
 {
 	struct zvm_module* mod = ZVM_MOD;
@@ -483,8 +491,8 @@ int zvm_end_module()
 
 	build_node_table(mod);
 
-	mod->node_output_bs32_p = buftop();
-	(void)zvm_arradd(ZVM_PRG->buf, bs32_n_words(mod->n_node_outputs));
+	mod->node_output_bs32_p = module_alloc_node_output_bs32(mod);
+	mod->node_output_aux_bs32_p = module_alloc_node_output_bs32(mod);
 
 	// initialize input bitsets
 	{
@@ -912,7 +920,7 @@ static int ack_instance_function(uint32_t parent_function_id, uint32_t p, uint32
 		key.full_outcome_request_bs32_p = prev_key.full_outcome_request_bs32_p;
 		#ifdef DEBUG
 		// verify
-		uint32_t* node_bs32 = get_node_output_bs32(parent_mod);
+		uint32_t* node_bs32 = bufp(parent_mod->node_output_aux_bs32_p);
 		for (int i = 0; i < instance_mod->n_outputs; i++) {
 			int node_index = get_node_index(parent_mod, p, i);
 			zvm_assert((bs32_test(node_bs32, node_index) == outcome_request_output_test(key.full_outcome_request_bs32_p, i)) && "unexpected full outcome request pattern");
@@ -921,13 +929,15 @@ static int ack_instance_function(uint32_t parent_function_id, uint32_t p, uint32
 	} else {
 		// use node visit set to produce full outcome request
 		key.full_outcome_request_bs32_p = bs32_alloc(outcome_request_sz);
-		uint32_t* node_bs32 = get_node_output_bs32(parent_mod);
+		uint32_t* node_bs32 = bufp(parent_mod->node_output_aux_bs32_p);
 		for (int i = 0; i < instance_mod->n_outputs; i++) {
 			int node_index = get_node_index(parent_mod, p, i);
 			if (bs32_test(node_bs32, node_index)) {
 				outcome_request_output_set(key.full_outcome_request_bs32_p, i);
 			}
 		}
+		// state is always in full outcome request
+		outcome_request_state_set(key.full_outcome_request_bs32_p);
 	}
 
 	int did_insert = 0;
@@ -948,12 +958,15 @@ static int ack_instance_function(uint32_t parent_function_id, uint32_t p, uint32
 	return instance_function_id;
 }
 
+static void copy_node_output_bs32_to_aux(struct zvm_module* mod)
+{
+	bs32_copy(mod->n_node_outputs, bufp(mod->node_output_aux_bs32_p), bufp(mod->node_output_bs32_p));
+}
+
 static void emit_function(uint32_t function_id)
 {
 	struct zvm_fnkey fnkey = resolve_function_id(function_id)->key;
 	struct zvm_module* mod = &ZVM_PRG->modules[fnkey.module_id];
-
-	int request_state = outcome_request_state_test(fnkey.outcome_request_bs32_p);
 
 	#if 0
 	// calculate future outcome request set, which is the full outcome request
@@ -988,7 +1001,7 @@ static void emit_function(uint32_t function_id)
 			add_drain(function_id, ZVM_NIL_P, output_index);
 		}
 
-		if (request_state) {
+		if (outcome_request_state_test(fnkey.outcome_request_bs32_p)) {
 			uint32_t p = mod->code_begin_p;
 			const uint32_t p_end = mod->code_end_p;
 			while (p < p_end) {
@@ -1076,7 +1089,7 @@ static void emit_function(uint32_t function_id)
 			push_drout(p, node_output[1]);
 		}
 
-		if (request_state) {
+		if (outcome_request_state_test(fnkey.outcome_request_bs32_p)) {
 			// add state outcome requests
 			uint32_t p = mod->code_begin_p;
 			const uint32_t p_end = mod->code_end_p;
@@ -1086,8 +1099,8 @@ static void emit_function(uint32_t function_id)
 				if (op == ZVM_OP(INSTANCE)) {
 					int module_id = code >> ZVM_OP_BITS;
 					zvm_assert(zvm__is_valid_module_id(module_id));
-					struct zvm_module* mod2 = &ZVM_PRG->modules[module_id];
-					if (module_has_state(mod2)) {
+					struct zvm_module* instance_mod = &ZVM_PRG->modules[module_id];
+					if (module_has_state(instance_mod)) {
 						fn->n_outcomes++;
 						push_drout(p, ZVM_NIL_ID);
 					}
@@ -1103,6 +1116,63 @@ static void emit_function(uint32_t function_id)
 				fn->n_outcomes,
 				DROUT_SZ,
 				drout_compar);
+		}
+	}
+
+	{
+		// populate aux visit set with traces from the full outcome request.
+		// since this visit set is a superset of the set generated by
+		// the "normal" outcome request, we'll memcpy it and save
+		// ourselves some tracing work.
+
+		copy_node_output_bs32_to_aux(mod);
+
+		struct tracer tr = {
+			.mod = mod,
+			.use_aux_visit_set = 1,
+		};
+
+		for (int output_index = 0; output_index < mod->n_outputs; output_index++) {
+			if (!outcome_request_output_test(fnkey.full_outcome_request_bs32_p, output_index)) {
+				continue;
+			}
+			if (outcome_request_output_test(fnkey.outcome_request_bs32_p, output_index)) {
+				// should already be in bitset due to copy, so
+				// skip (skipping is almost redundant because
+				// the visit set should halt the trace very
+				// early?)
+				continue;
+			}
+			trace(&tr, bufp(mod->outputs_p)[output_index]);
+		}
+
+		zvm_assert(outcome_request_state_test(fnkey.full_outcome_request_bs32_p) && "assuming state update is always part of full request");
+
+		if (!outcome_request_state_test(fnkey.outcome_request_bs32_p)) { // only if not already traced...
+			uint32_t p = mod->code_begin_p;
+			const uint32_t p_end = mod->code_end_p;
+			while (p < p_end) {
+				uint32_t code = *bufp(p);
+				int op = code & ZVM_OP_MASK;
+				if (op == ZVM_OP(UNIT_DELAY)) {
+					trace(&tr, *bufp(zvm__arg_index(p, 0)));
+				} else if (op == ZVM_OP(INSTANCE)) {
+					int module_id = code >> ZVM_OP_BITS;
+					zvm_assert(zvm__is_valid_module_id(module_id));
+					struct zvm_module* instance_mod = &ZVM_PRG->modules[module_id];
+					if (module_has_state(instance_mod)) {
+						int n_inputs = instance_mod->n_inputs;
+						uint32_t* ibs = get_state_input_dep_bs32(instance_mod);
+						for (int i = 0; i < n_inputs; i++) {
+							if (bs32_test(ibs, i)) {
+								trace(&tr, *bufp(zvm__arg_index(p, i)));
+							}
+						}
+					}
+				}
+				p += get_op_length(p);
+			}
+			zvm_assert(p == p_end);
 		}
 	}
 
@@ -1233,16 +1303,13 @@ static void emit_function(uint32_t function_id)
 
 			uint32_t index = outcome[DROUT_INDEX];
 			if (index != ZVM_NIL_ID) {
-				// mark instance outcome nodes in visit set; this makes
-				// it easy to extract the "full outcome request" of an
-				// instance
-				visit_node(mod, outcome[DROUT_P], index);
+				// mark instance outcome nodes in visit set;
+				// used to detect if a sequence of instance
+				// output outcomes constitute a "non-fragmented
+				// call"
+				visit_node(mod, outcome[DROUT_P], index, 0);
 			}
 		}
-
-		// XXX FIXME - I also need a visit set representing the
-		// parent's full outcome request? i.e. I must trace back and
-		// find all outputs requested by the full request 
 
 		// set nil function id
 		uint32_t* pairs = bufp(mod->instance_u32_map_p);
@@ -1329,7 +1396,9 @@ static void emit_function(uint32_t function_id)
 				// the chain
 				int is_full_call = 1;
 				int ii = 0;
-				for (int j = 0; j < (n_instance_outputs+1); j++) {
+				int requesting_state = module_has_state(instance_mod) && outcome_request_state_test(fnkey.outcome_request_bs32_p);
+				int n_checks = n_instance_outputs + (requesting_state ? 1 : 0);
+				for (int j = 0; j < n_checks; j++) {
 					const int is_output = (j < n_instance_outputs);
 					const int is_state  = (j == n_instance_outputs);
 
@@ -1341,10 +1410,6 @@ static void emit_function(uint32_t function_id)
 						}
 						expected_drout_index = j;
 					} else if (is_state) {
-						const int request_state = module_has_state(instance_mod);
-						if (!request_state) {
-							continue;
-						}
 						expected_drout_index = ZVM_NIL_ID;
 					} else {
 						zvm_assert(!"unreachable");
@@ -1448,8 +1513,6 @@ static void emit_function(uint32_t function_id)
 		emit_function(new_function_id);
 	}
 
-	// FIXME state in outcome requests is not properly handled, I think?
-
 	// FIXME instance splitting is only done locally... i.e. new call
 	// chains are always created from scratch when an instance is first
 	// seen during emit_function(). rather, a call chain from a previous
@@ -1484,7 +1547,6 @@ static void emit_function(uint32_t function_id)
 	printf("ENDPLAN\n\n");
 	#endif
 	#endif
-
 }
 
 void zvm_end_program(uint32_t main_module_id)
