@@ -82,8 +82,8 @@ struct zvm_module {
 
 	uint32_t input_bs32s_p;
 
-	int n_instance_u32_values;
-	uint32_t instance_u32_map_p;
+	int n_instances;
+	uint32_t instances_p;
 
 	int n_bits;
 	int refcount;
@@ -107,6 +107,8 @@ struct zvm_function {
 	uint32_t drains_p;
 	int n_outcomes;
 	uint32_t outcomes_p;
+	int n_instance_u32_values;
+	uint32_t instance_u32_map_p;
 };
 
 struct zvm_program {

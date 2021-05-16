@@ -521,19 +521,17 @@ int zvm_end_module()
 
 	// initialize instance->u32 keyval map
 	{
-		mod->instance_u32_map_p = buftop();
+		mod->instances_p = buftop();
 
 		uint32_t p = mod->code_begin_p;
 		const uint32_t p_end = mod->code_end_p;
-		mod->n_instance_u32_values = 0;
+		mod->n_instances = 0;
 		while (p < p_end) {
 			uint32_t code = *bufp(p);
 			int op = code & ZVM_OP_MASK;
 			if (op == ZVM_OP(INSTANCE)) {
-				uint32_t* xs = zvm_arradd(ZVM_PRG->buf, 2);
-				xs[0] = p;
-				xs[1] = 0;
-				mod->n_instance_u32_values++;
+				zvm_arrpush(ZVM_PRG->buf, p);
+				mod->n_instances++;
 			}
 			p += get_op_length(p);
 		}
@@ -543,11 +541,11 @@ int zvm_end_module()
 	return zvm_arrlen(ZVM_PRG->modules) - 1;
 }
 
-static uint32_t get_instance_u32_map_index(struct zvm_module* mod, uint32_t instance_p)
+static uint32_t fn_get_instance_u32_map_index(struct zvm_function* fn, uint32_t instance_p)
 {
-	uint32_t* pairs = bufp(mod->instance_u32_map_p);
+	uint32_t* pairs = bufp(fn->instance_u32_map_p);
 	int left = 0;
-	int right = mod->n_instance_u32_values - 1;
+	int right = fn->n_instance_u32_values - 1;
 	while (left <= right) {
 		int mid = (left + right) >> 1;
 		uint32_t k = pairs[mid << 1];
@@ -565,20 +563,19 @@ static uint32_t get_instance_u32_map_index(struct zvm_module* mod, uint32_t inst
 	zvm_assert(!"instance_p not found");
 }
 
-static uint32_t instance_u32_map_get(struct zvm_module* mod, uint32_t instance_p)
+static uint32_t fn_instance_u32_map_get(struct zvm_function* fn, uint32_t instance_p)
 {
-	uint32_t index = get_instance_u32_map_index(mod, instance_p);
-	uint32_t* pairs = bufp(mod->instance_u32_map_p);
+	uint32_t index = fn_get_instance_u32_map_index(fn, instance_p);
+	uint32_t* pairs = bufp(fn->instance_u32_map_p);
 	return pairs[(index << 1) + 1];
 }
 
-static void instance_u32_map_set(struct zvm_module* mod, uint32_t instance_p, uint32_t value)
+static void fn_instance_u32_map_set(struct zvm_function* fn, uint32_t instance_p, uint32_t value)
 {
-	uint32_t index = get_instance_u32_map_index(mod, instance_p);
-	uint32_t* pairs = bufp(mod->instance_u32_map_p);
+	uint32_t index = fn_get_instance_u32_map_index(fn, instance_p);
+	uint32_t* pairs = bufp(fn->instance_u32_map_p);
 	pairs[(index << 1) + 1] = value;
 }
-
 
 static int fnkey_cmp(const void* va, const void* vb)
 {
@@ -643,6 +640,20 @@ static int fnkeyval_cmp(const void* va, const void* vb)
 }
 #endif
 
+static void fn_init_instance_u32_map(struct zvm_function* fn)
+{
+	struct zvm_module* mod = &ZVM_PRG->modules[fn->key.module_id];
+
+	int n = fn->n_instance_u32_values = mod->n_instances;
+	fn->instance_u32_map_p = buftop();
+	uint32_t* xs = zvm_arradd(ZVM_PRG->buf, 2*n);
+	uint32_t* ys = bufp(mod->instances_p);
+	for (int i = 0; i < n; i++) {
+		xs[i*2] = ys[i];
+		xs[i*2+1] = 0;
+	}
+}
+
 static int produce_fnkey_function_id(struct zvm_fnkey* key, int* did_insert)
 {
 	int left = 0;
@@ -678,6 +689,7 @@ static int produce_fnkey_function_id(struct zvm_fnkey* key, int* did_insert)
 
 	struct zvm_function fn = {0};
 	fn.key = *key;
+	fn_init_instance_u32_map(&fn);
 	zvm_arrpush(ZVM_PRG->functions, fn);
 
 	if (did_insert) *did_insert = 1;
@@ -948,12 +960,12 @@ static int ack_instance_function(uint32_t parent_function_id, uint32_t p, uint32
 	} else {
 	}
 
-	// set up potential chain by storing function id in instance->u32 map
-	instance_u32_map_set(parent_mod, p, instance_function_id);
-
 	// keep pointer values valid
-	*update_fn = resolve_function_id(parent_function_id);
+	*update_fn = pfn = resolve_function_id(parent_function_id);
 	*update_queue = bufp(queue_p);
+
+	// set up potential chain by storing function id in instance->u32 map
+	fn_instance_u32_map_set(pfn, p, instance_function_id);
 
 	return instance_function_id;
 }
@@ -961,6 +973,27 @@ static int ack_instance_function(uint32_t parent_function_id, uint32_t p, uint32
 static void copy_node_output_bs32_to_aux(struct zvm_module* mod)
 {
 	bs32_copy(mod->n_node_outputs, bufp(mod->node_output_aux_bs32_p), bufp(mod->node_output_bs32_p));
+}
+
+static uint32_t fn_find_prev_function_id(struct zvm_function* fn, uint32_t p)
+{
+	// XXX is this correct...? can't call chain continuation be arbitrarily
+	// deep... ?
+
+	for (;;) {
+		uint32_t prev_function_id = fn_instance_u32_map_get(fn, p);
+		if (prev_function_id != ZVM_NIL_ID) {
+			return prev_function_id;
+		}
+
+		if (fn->key.prev_function_id == ZVM_NIL_ID) {
+			break;
+		}
+
+		fn = resolve_function_id(fn->key.prev_function_id);
+	}
+
+	return ZVM_NIL_ID;
 }
 
 static void emit_function(uint32_t function_id)
@@ -1311,12 +1344,6 @@ static void emit_function(uint32_t function_id)
 			}
 		}
 
-		// set nil function id
-		uint32_t* pairs = bufp(mod->instance_u32_map_p);
-		for (int i = 0; i < mod->n_instance_u32_values; i++) {
-			pairs[(i << 1) + 1] = ZVM_NIL_ID;
-		}
-
 		while (queue_i < queue_n) {
 			int has_drains = 0;
 			int has_outcomes = 0;
@@ -1455,14 +1482,13 @@ static void emit_function(uint32_t function_id)
 					int pspan_length = queue_outcome_get_pspan_length(fn->outcomes_p, &queue[queue_i], queue_n0-queue_i, 0);
 
 					uint32_t p0 = bufp(fn->outcomes_p + GET_VALUE(queue[queue_i])*DROUT_LEN)[DROUT_P];
-					uint32_t prev_function_id = instance_u32_map_get(mod, p0);
 
 					ack_instance_function(
 						function_id,
 						p0,
 						queue_i,
 						pspan_length,
-						prev_function_id,
+						fn_find_prev_function_id(fn, p0),
 						queue_p,
 						&queue_n,
 						&fn, &queue);
@@ -1487,13 +1513,12 @@ static void emit_function(uint32_t function_id)
 
 				int pspan_length = queue_outcome_get_pspan_length(fn->outcomes_p, &queue[queue_i], queue_n-queue_i, 0);
 				uint32_t p0 = bufp(fn->outcomes_p + GET_VALUE(queue[queue_i])*DROUT_LEN)[DROUT_P];
-				uint32_t prev_function_id = instance_u32_map_get(mod, p0);
 				ack_instance_function(
 					function_id,
 					p0,
 					queue_i,
 					pspan_length,
-					prev_function_id,
+					fn_find_prev_function_id(fn, p0),
 					queue_p,
 					&queue_n,
 					&fn, &queue);
