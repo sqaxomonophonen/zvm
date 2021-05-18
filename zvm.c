@@ -1333,7 +1333,6 @@ static void process_substance(uint32_t substance_id)
 	// mutates buf
 
 	struct zvm_substance* sb = resolve_substance_id(substance_id);
-	sb->sequence_len = 0;
 	sb->sequence_p = buftop();
 	queue_i = 0;
 	while (queue_i < queue_n) {
@@ -1378,11 +1377,12 @@ static void process_substance(uint32_t substance_id)
 		zvm_assert((buftop() == top0) && (zvm_arrlen(ZVM_PRG->substances) == n_substances0) && "expected ack_substance() to FIND, not INSERT, substance; value mutation indicates this is not the case");
 
 		substance_sequence_push(p0, ack_substance_id);
-		sb->sequence_len++;
 
 		queue_i += pspan_length;
 	}
+	sb->sequence_len = (buftop() - sb->sequence_p) >> 1;
 
+	#if 1
 	#ifdef VERBOSE_DEBUG
 	printf("Sequence for substance #%d:\n", substance_id);
 	for (int i = 0; i < sb->sequence_len; i++) {
@@ -1395,6 +1395,7 @@ static void process_substance(uint32_t substance_id)
 			printf("  p=%d substance_id=%d\n", p, substance_id);
 		}
 	}
+	#endif
 	#endif
 
 	const int new_substance_ids_end = zvm_arrlen(ZVM_PRG->substances);
