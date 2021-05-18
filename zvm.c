@@ -1341,6 +1341,17 @@ static void process_substance(uint32_t substance_id)
 
 		uint32_t qv = queue[queue_i];
 		if (IS_DRAIN(qv)) {
+			uint32_t v = GET_VALUE(qv);
+			uint32_t* drain = bufp(drains_p + v*DROUT_LEN);
+			uint32_t p = drain[DROUT_P];
+			if (p != ZVM_NIL_P) {
+				zvm_assert(!ZVM_IS_SPECIAL(p));
+				uint32_t code = *bufp(p);
+				int op = code & ZVM_OP_MASK;
+				if (op == ZVM_OP(UNIT_DELAY)) {
+					substance_sequence_push(p, ZVM_NIL_ID);
+				}
+			}
 			queue_i++;
 			continue;
 		}
@@ -1368,8 +1379,6 @@ static void process_substance(uint32_t substance_id)
 
 		substance_sequence_push(p0, ack_substance_id);
 		sb->sequence_len++;
-
-		// XXX TODO what about unit delays?
 
 		queue_i += pspan_length;
 	}
