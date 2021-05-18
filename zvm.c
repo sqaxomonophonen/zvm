@@ -1424,7 +1424,8 @@ void zvm_end_program(uint32_t main_module_id)
 	process_substance(ZVM_PRG->main_substance_id = produce_substance_id_for_key(&main_key, &did_insert));
 	zvm_assert(did_insert);
 
-	int buf_sz_after_compile = buftop();
+	int buf_sz_after_process_substance = buftop();
+
 
 	#ifdef VERBOSE_DEBUG
 	printf("=======================================\n");
@@ -1441,8 +1442,8 @@ void zvm_end_program(uint32_t main_module_id)
 
 		printf("\n");
 	}
-	printf("buf sz after end program:  %d\n", buf_sz_after_end_program);
-	printf("buf sz after compile:      %d\n", buf_sz_after_compile);
+	printf("buf sz after end program:        %d\n", buf_sz_after_end_program);
+	printf("buf sz after process substance:  %d\n", buf_sz_after_process_substance);
 	printf("=======================================\n");
 	#endif
 }
