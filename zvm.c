@@ -876,8 +876,6 @@ static int ack_substance(uint32_t p, uint32_t queue_i, int n, uint32_t queue_p, 
 
 static void process_substance(uint32_t substance_id)
 {
-	uint32_t eventual_sequence_p = buftop();
-
 	struct zvm_substance_key key = resolve_substance_id(substance_id)->key;
 	struct zvm_module* mod = &ZVM_PRG->modules[key.module_id];
 
@@ -1334,8 +1332,9 @@ static void process_substance(uint32_t substance_id)
 	// prefer constructing in the loop above, but ack_substance() *also*
 	// mutates buf
 
-	uint32_t tmp_sequence_p = buftop();
-
+	struct zvm_substance* sb = resolve_substance_id(substance_id);
+	sb->sequence_len = 0;
+	sb->sequence_p = buftop();
 	queue_i = 0;
 	while (queue_i < queue_n) {
 		zvm_assert(queue == bufp(queue_p) && "sanity check failed; queue ptr was NOT kept fresh");
@@ -1368,48 +1367,28 @@ static void process_substance(uint32_t substance_id)
 		zvm_assert((buftop() == top0) && (zvm_arrlen(ZVM_PRG->substances) == n_substances0) && "expected ack_substance() to FIND, not INSERT, substance; value mutation indicates this is not the case");
 
 		substance_sequence_push(p0, ack_substance_id);
+		sb->sequence_len++;
 
 		// XXX TODO what about unit delays?
 
 		queue_i += pspan_length;
 	}
 
-	// XXX the bug here is that buf is ALSO used for outcome_request_bs32_p
-	// which is NOT temporary storage... (but is that the ONLY buf-related
-	// bug?)
-
-	// buf has been used for temporary data necessary to construct the
-	// sequence; to "free" the temporary data, move the sequence to the
-	// "top", and downsize buf to fit
-	{
-		const int sequence_len = (buftop() - tmp_sequence_p) >> 1;
-		const size_t sequence_sz = 2 * sequence_len * sizeof(*bufp(eventual_sequence_p));
-		memmove(bufp(eventual_sequence_p), bufp(tmp_sequence_p), sequence_sz);
-		zvm_arrsetlen(ZVM_PRG->buf, eventual_sequence_p + sequence_sz);
-		struct zvm_substance* sb = resolve_substance_id(substance_id);
-		sb->sequence_len = sequence_len;
-		sb->sequence_p = eventual_sequence_p;
-
-		#if 0
-		#ifdef VERBOSE_DEBUG
-		printf("Sequence for substance #%d:\n", substance_id);
-		for (int i = 0; i < sequence_len; i++) {
-			uint32_t* pair = bufp(eventual_sequence_p + (i<<1));
-			uint32_t p = pair[0];
-			uint32_t substance_id = pair[1];
-			if (substance_id == ZVM_NIL_ID) {
-				printf("  p=%d substance_id=<nil> (unit delay)\n", p);
-			} else {
-				printf("  p=%d substance_id=%d\n", p, substance_id);
-			}
+	#ifdef VERBOSE_DEBUG
+	printf("Sequence for substance #%d:\n", substance_id);
+	for (int i = 0; i < sb->sequence_len; i++) {
+		uint32_t* pair = bufp(sb->sequence_p + (i<<1));
+		uint32_t p = pair[0];
+		uint32_t substance_id = pair[1];
+		if (substance_id == ZVM_NIL_ID) {
+			printf("  p=%d substance_id=<nil> (unit delay)\n", p);
+		} else {
+			printf("  p=%d substance_id=%d\n", p, substance_id);
 		}
-		#endif
-		#endif
 	}
+	#endif
 
-	// finally, recursively process the new substances...
-
-	int new_substance_ids_end = zvm_arrlen(ZVM_PRG->substances);
+	const int new_substance_ids_end = zvm_arrlen(ZVM_PRG->substances);
 	for (int new_substance_id = new_substance_ids_begin; new_substance_id < new_substance_ids_end; new_substance_id++) {
 		process_substance(new_substance_id);
 	}
