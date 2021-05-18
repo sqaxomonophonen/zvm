@@ -1382,7 +1382,7 @@ static void process_substance(uint32_t substance_id)
 	}
 	sb->sequence_len = (buftop() - sb->sequence_p) >> 1;
 
-	#if 1
+	#if 0
 	#ifdef VERBOSE_DEBUG
 	printf("Sequence for substance #%d:\n", substance_id);
 	for (int i = 0; i < sb->sequence_len; i++) {
@@ -1420,7 +1420,9 @@ void zvm_end_program(uint32_t main_module_id)
 
 	bs32_fill(outcome_request_sz, bufp(main_key.outcome_request_bs32_p), 1);
 
-	process_substance(ZVM_PRG->main_substance_id = produce_substance_id_for_key(&main_key, NULL));
+	int did_insert = 0;
+	process_substance(ZVM_PRG->main_substance_id = produce_substance_id_for_key(&main_key, &did_insert));
+	zvm_assert(did_insert);
 
 	int buf_sz_after_compile = buftop();
 
