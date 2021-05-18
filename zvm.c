@@ -324,10 +324,10 @@ static void clear_node_visit_set(struct zvm_module* mod)
 	bs32_clear_all(mod->n_node_outputs, get_node_output_bs32(mod));
 }
 
-static int visit_node(struct zvm_module* mod, uint32_t p, uint32_t output_index, int use_aux_visit_set)
+static int visit_node(struct zvm_module* mod, uint32_t p, uint32_t output_index)
 {
 	int node_index = get_node_index(mod, p, output_index);
-	uint32_t* node_bs32 = bufp(use_aux_visit_set ? mod->node_output_aux_bs32_p : mod->node_output_bs32_p);
+	uint32_t* node_bs32 = bufp(mod->node_output_bs32_p);
 	if (bs32_test(node_bs32, node_index)) {
 		return 0;
 	} else {
@@ -338,8 +338,7 @@ static int visit_node(struct zvm_module* mod, uint32_t p, uint32_t output_index,
 
 struct tracer {
 	struct zvm_module* mod;
-	int use_aux_visit_set;
-	uint32_t function_id;
+	uint32_t substance_id;
 
 	void(*module_input_visitor)(struct tracer*, uint32_t p);
 	void(*instance_output_visitor)(struct tracer*, uint32_t p, int output_index);
@@ -349,9 +348,9 @@ struct tracer {
 	void* usr;
 };
 
-static inline struct zvm_function* tracer_function(struct tracer* tr)
+static inline struct zvm_substance* tracer_substance(struct tracer* tr)
 {
-	return &ZVM_PRG->functions[tr->function_id];
+	return &ZVM_PRG->substances[tr->substance_id];
 }
 
 static void trace(struct tracer* tr, uint32_t p)
@@ -378,7 +377,7 @@ static void trace(struct tracer* tr, uint32_t p)
 
 		int output_index = unpack_index >= 0 ? unpack_index : 0;
 
-		if (!visit_node(tr->mod, p, output_index, tr->use_aux_visit_set)) {
+		if (!visit_node(tr->mod, p, output_index)) {
 			return;
 		}
 
@@ -492,7 +491,6 @@ int zvm_end_module()
 	build_node_table(mod);
 
 	mod->node_output_bs32_p = module_alloc_node_output_bs32(mod);
-	mod->node_output_aux_bs32_p = module_alloc_node_output_bs32(mod);
 
 	// initialize input bitsets
 	{
@@ -519,68 +517,13 @@ int zvm_end_module()
 		#endif
 	}
 
-	// initialize instance->u32 keyval map
-	{
-		mod->instances_p = buftop();
-
-		uint32_t p = mod->code_begin_p;
-		const uint32_t p_end = mod->code_end_p;
-		mod->n_instances = 0;
-		while (p < p_end) {
-			uint32_t code = *bufp(p);
-			int op = code & ZVM_OP_MASK;
-			if (op == ZVM_OP(INSTANCE)) {
-				zvm_arrpush(ZVM_PRG->buf, p);
-				mod->n_instances++;
-			}
-			p += get_op_length(p);
-		}
-		zvm_assert(p == p_end);
-	}
-
 	return zvm_arrlen(ZVM_PRG->modules) - 1;
 }
 
-static uint32_t fn_get_instance_u32_map_index(struct zvm_function* fn, uint32_t instance_p)
+static int substance_key_cmp(const void* va, const void* vb)
 {
-	uint32_t* pairs = bufp(fn->instance_u32_map_p);
-	int left = 0;
-	int right = fn->n_instance_u32_values - 1;
-	while (left <= right) {
-		int mid = (left + right) >> 1;
-		uint32_t k = pairs[mid << 1];
-		if (k < instance_p) {
-			left = mid + 1;
-		} else if (k > instance_p) {
-			right = mid - 1;
-		} else {
-			return mid;
-		}
-	}
-	#ifdef VERBOSE_DEBUG
-	printf("instance_p=%d not found!\n", instance_p);
-	#endif
-	zvm_assert(!"instance_p not found");
-}
-
-static uint32_t fn_instance_u32_map_get(struct zvm_function* fn, uint32_t instance_p)
-{
-	uint32_t index = fn_get_instance_u32_map_index(fn, instance_p);
-	uint32_t* pairs = bufp(fn->instance_u32_map_p);
-	return pairs[(index << 1) + 1];
-}
-
-static void fn_instance_u32_map_set(struct zvm_function* fn, uint32_t instance_p, uint32_t value)
-{
-	uint32_t index = fn_get_instance_u32_map_index(fn, instance_p);
-	uint32_t* pairs = bufp(fn->instance_u32_map_p);
-	pairs[(index << 1) + 1] = value;
-}
-
-static int fnkey_cmp(const void* va, const void* vb)
-{
-	const struct zvm_fnkey* a = va;
-	const struct zvm_fnkey* b = vb;
+	const struct zvm_substance_key* a = va;
+	const struct zvm_substance_key* b = vb;
 
 	int c0 = u32cmp(a->module_id, b->module_id);
 	if (c0 != 0) return c0;
@@ -588,18 +531,13 @@ static int fnkey_cmp(const void* va, const void* vb)
 	struct zvm_module* mod = &ZVM_PRG->modules[a->module_id];
 	const int outcome_request_sz = get_module_outcome_request_sz(mod);
 
-	if (a->full_outcome_request_bs32_p != b->full_outcome_request_bs32_p) {
-		int c1 = bs32_cmp(outcome_request_sz, bufp(a->full_outcome_request_bs32_p), bufp(b->full_outcome_request_bs32_p));
-		if (c1 != 0) return c1;
-	}
-
 	if (a->outcome_request_bs32_p != b->outcome_request_bs32_p) {
-		int c2 = bs32_cmp(outcome_request_sz, bufp(a->outcome_request_bs32_p), bufp(b->outcome_request_bs32_p));
-		if (c2 != 0) return c2;
+		return bs32_cmp(outcome_request_sz, bufp(a->outcome_request_bs32_p), bufp(b->outcome_request_bs32_p));
+	} else {
+		return 0;
 	}
-
-	return u32cmp(a->prev_function_id, b->prev_function_id);
 }
+
 
 static inline int outcome_request_state_index()
 {
@@ -631,37 +569,16 @@ static void outcome_request_output_set(uint32_t p, int output_index)
 	bs32_set(bufp(p), outcome_request_output_index(output_index));
 }
 
-#if 0
-static int fnkeyval_cmp(const void* va, const void* vb)
+static int produce_substance_id_for_key(struct zvm_substance_key* key, int* did_insert)
 {
-	const struct zvm_fnkeyval* a = va;
-	const struct zvm_fnkeyval* b = vb;
-	return fnkey_cmp(&a->key, &b->key);
-}
-#endif
-
-static void fn_init_instance_u32_map(struct zvm_function* fn)
-{
-	struct zvm_module* mod = &ZVM_PRG->modules[fn->key.module_id];
-
-	int n = fn->n_instance_u32_values = mod->n_instances;
-	fn->instance_u32_map_p = buftop();
-	uint32_t* xs = zvm_arradd(ZVM_PRG->buf, 2*n);
-	uint32_t* ys = bufp(mod->instances_p);
-	for (int i = 0; i < n; i++) {
-		xs[i*2] = ys[i];
-		xs[i*2+1] = 0;
-	}
-}
-
-static int produce_fnkey_function_id(struct zvm_fnkey* key, int* did_insert)
-{
+	// leftmost binary search; finds either an existing key (in which case,
+	// don't insert), or the proper insertion index
 	int left = 0;
-	int n = zvm_arrlen(ZVM_PRG->fnkeyvals);
+	int n = zvm_arrlen(ZVM_PRG->substance_keyvals);
 	int right = n;
 	while (left < right) {
 		int mid = (left+right) >> 1;
-		if (fnkey_cmp(&ZVM_PRG->fnkeyvals[mid].key, key) < 0) {
+		if (substance_key_cmp(&ZVM_PRG->substance_keyvals[mid].key, key) < 0) {
 			left = mid + 1;
 		} else {
 			right = mid;
@@ -669,32 +586,35 @@ static int produce_fnkey_function_id(struct zvm_fnkey* key, int* did_insert)
 	}
 
 	if (left < n) {
-		struct zvm_fnkeyval* val = &ZVM_PRG->fnkeyvals[left];
-		if (fnkey_cmp(&val->key, key) == 0) {
-			return val->function_id;
+		struct zvm_substance_keyval* keyval = &ZVM_PRG->substance_keyvals[left];
+		if (substance_key_cmp(&keyval->key, key) == 0) {
+			return keyval->substance_id;
 		}
 	}
 
-	(void)zvm_arradd(ZVM_PRG->fnkeyvals, 1);
+	// grow array by one
+	(void)zvm_arradd(ZVM_PRG->substance_keyvals, 1);
 
-	struct zvm_fnkeyval* val = &ZVM_PRG->fnkeyvals[left];
+	struct zvm_substance_keyval* keyval = &ZVM_PRG->substance_keyvals[left];
 
 	int to_move = n - left;
 	if (to_move > 0) {
-		memmove(val+1, val, to_move*sizeof(*val));
+		memmove(keyval+1, keyval, to_move*sizeof(*keyval));
 	}
 
-	val->key = *key;
-	val->function_id = zvm_arrlen(ZVM_PRG->functions);
+	keyval->key = *key;
+	keyval->substance_id = zvm_arrlen(ZVM_PRG->substances);
 
-	struct zvm_function fn = {0};
-	fn.key = *key;
+	struct zvm_substance sb = {0};
+	sb.key = *key;
+	#if 0
 	fn_init_instance_u32_map(&fn);
-	zvm_arrpush(ZVM_PRG->functions, fn);
+	#endif
+	zvm_arrpush(ZVM_PRG->substances, sb);
 
 	if (did_insert) *did_insert = 1;
 
-	return val->function_id;
+	return keyval->substance_id;
 }
 
 
@@ -770,17 +690,17 @@ static void add_drain_instance_output_visitor(struct tracer* tr, uint32_t p, int
 	}
 }
 
-static inline struct zvm_function* resolve_function_id(uint32_t function_id)
+static inline struct zvm_substance* resolve_substance_id(uint32_t substance_id)
 {
-	return &ZVM_PRG->functions[function_id];
+	return &ZVM_PRG->substances[substance_id];
 }
 
-static void add_drain(uint32_t function_id, uint32_t p, int index)
+static void add_drain(uint32_t substance_id, uint32_t p, int index)
 {
 	push_drout(p, index);
 
 	struct tracer tr = {
-		.mod = &ZVM_PRG->modules[resolve_function_id(function_id)->key.module_id],
+		.mod = &ZVM_PRG->modules[resolve_substance_id(substance_id)->key.module_id],
 		.instance_output_visitor = add_drain_instance_output_visitor
 	};
 	uint32_t pp = (p == ZVM_NIL_P)
@@ -789,21 +709,26 @@ static void add_drain(uint32_t function_id, uint32_t p, int index)
 	trace(&tr, pp);
 }
 
+struct drain_to_output_instance_output_visitor_usr {
+	uint32_t* drain;
+	uint32_t setp;
+	uint32_t n_outcomes;
+	uint32_t outcomes_p;
+};
+
 static void drain_to_output_instance_output_visitor_count(struct tracer* tr, uint32_t p, int output_index)
 {
-	uint32_t* drain = (uint32_t*)tr->usr;
-	drain[DROUT_COUNTER]++;
-
-	struct zvm_function* fn = tracer_function(tr);
-	uint32_t* outcome = drout_find(fn->outcomes_p, fn->n_outcomes, p, output_index);
+	struct drain_to_output_instance_output_visitor_usr* usr = tr->usr;
+	usr->drain[DROUT_COUNTER]++;
+	uint32_t* outcome = drout_find(usr->outcomes_p, usr->n_outcomes, p, output_index);
 	outcome[DROUT_DECR_LIST_N]++;
 }
 
 static void drain_to_output_instance_output_visitor_write(struct tracer* tr, uint32_t p, int output_index)
 {
-	struct zvm_function* fn = tracer_function(tr);
-	uint32_t* outcome = drout_find(fn->outcomes_p, fn->n_outcomes, p, output_index);
-	bufp(outcome[DROUT_DECR_LIST_P])[outcome[DROUT_DECR_LIST_N]++] = *((int*)tr->usr);
+	struct drain_to_output_instance_output_visitor_usr* usr = tr->usr;
+	uint32_t* outcome = drout_find(usr->outcomes_p, usr->n_outcomes, p, output_index);
+	bufp(outcome[DROUT_DECR_LIST_P])[outcome[DROUT_DECR_LIST_N]++] = usr->setp;
 }
 
 #define ENCODE_DRAIN(v)    ((v)&0x7fffffff)
@@ -877,7 +802,14 @@ static int queue_outcome_get_pspan_length(uint32_t outcomes_p, uint32_t* queue, 
 	return n;
 }
 
-static int ack_instance_function(uint32_t parent_function_id, uint32_t p, uint32_t queue_i, int n, uint32_t prev_function_id, uint32_t queue_p, int* queue_np, struct zvm_function** update_fn, uint32_t** update_queue)
+static void substance_sequence_push(uint32_t p0, uint32_t ack_substance_id)
+{
+	uint32_t* xs = zvm_arradd(ZVM_PRG->buf, 2);
+	xs[0] = p0;
+	xs[1] = ack_substance_id;
+}
+
+static int ack_substance(uint32_t p, uint32_t queue_i, int n, uint32_t queue_p, int* queue_np, uint32_t drains_p, uint32_t outcomes_p, uint32_t** update_queue, int lookup_only)
 {
 	uint32_t buftop0 = buftop();
 
@@ -887,22 +819,21 @@ static int ack_instance_function(uint32_t parent_function_id, uint32_t p, uint32
 
 	struct zvm_module* instance_mod = &ZVM_PRG->modules[instance_module_id];
 	const int outcome_request_sz = get_module_outcome_request_sz(instance_mod);
-	struct zvm_function* pfn = &ZVM_PRG->functions[parent_function_id];
-	struct zvm_module* parent_mod = &ZVM_PRG->modules[pfn->key.module_id];
 
-	struct zvm_fnkey key = {
+	struct zvm_substance_key key = {
 		.module_id = instance_module_id,
-		.prev_function_id = prev_function_id,
 		.outcome_request_bs32_p = bs32_alloc(outcome_request_sz),
 	};
 
 	uint32_t* queue = bufp(queue_p + queue_i);
+	uint32_t* drains = bufp(drains_p);
+	uint32_t* outcomes = bufp(outcomes_p);
 	for (int i = 0; i < n; i++) {
 		// populate outcome_request_bs32_p ...
 		uint32_t qv = queue[i];
 		zvm_assert(IS_OUTCOME(qv));
 		uint32_t outcome_index = GET_VALUE(qv);
-		uint32_t* outcome = bufp(pfn->outcomes_p + outcome_index * DROUT_LEN);
+		uint32_t* outcome = &outcomes[outcome_index * DROUT_LEN];
 		zvm_assert(outcome[DROUT_P] == p);
 		uint32_t index = outcome[DROUT_INDEX];
 		if (index == ZVM_NIL_ID) {
@@ -911,137 +842,71 @@ static int ack_instance_function(uint32_t parent_function_id, uint32_t p, uint32
 			outcome_request_output_set(key.outcome_request_bs32_p, outcome[DROUT_INDEX]);
 		}
 
-		// potentially release outcomes ...
-		uint32_t decr_list_n = outcome[DROUT_DECR_LIST_N];
-		uint32_t decr_list_p = outcome[DROUT_DECR_LIST_P];
-		for (int i = 0; i < decr_list_n; i++) {
-			uint32_t drain_index = *bufp(decr_list_p + i);
-			uint32_t* drain = bufp(pfn->drains_p + drain_index*DROUT_LEN);
-			zvm_assert(drain[DROUT_COUNTER] > 0 && "decrement when zero not expected");
-			drain[DROUT_COUNTER]--;
-			if (drain[DROUT_COUNTER] == 0) {
-				*bufp(queue_p + ((*queue_np)++)) = ENCODE_DRAIN(drain_index);
+		if (!lookup_only) {
+			// potentially release outcomes ...
+			uint32_t decr_list_n = outcome[DROUT_DECR_LIST_N];
+			uint32_t decr_list_p = outcome[DROUT_DECR_LIST_P];
+			for (int i = 0; i < decr_list_n; i++) {
+				uint32_t drain_index = *bufp(decr_list_p + i);
+				uint32_t* drain = &drains[drain_index * DROUT_LEN];
+				zvm_assert(drain[DROUT_COUNTER] > 0 && "decrement when zero not expected");
+				drain[DROUT_COUNTER]--;
+				if (drain[DROUT_COUNTER] == 0) {
+					*bufp(queue_p + ((*queue_np)++)) = ENCODE_DRAIN(drain_index);
+				}
 			}
 		}
-	}
-
-	// find full_outcome_request_bs32_p; either share with previous function
-	// if part of a chain, or generate a new
-	if (prev_function_id != ZVM_NIL_ID) {
-		struct zvm_fnkey prev_key = ZVM_PRG->functions[prev_function_id].key;
-		key.full_outcome_request_bs32_p = prev_key.full_outcome_request_bs32_p;
-		#ifdef DEBUG
-		// verify
-		uint32_t* node_bs32 = bufp(parent_mod->node_output_aux_bs32_p);
-		for (int i = 0; i < instance_mod->n_outputs; i++) {
-			int node_index = get_node_index(parent_mod, p, i);
-			zvm_assert((bs32_test(node_bs32, node_index) == outcome_request_output_test(key.full_outcome_request_bs32_p, i)) && "unexpected full outcome request pattern");
-		}
-		#endif
-	} else {
-		// use node visit set to produce full outcome request
-		key.full_outcome_request_bs32_p = bs32_alloc(outcome_request_sz);
-		uint32_t* node_bs32 = bufp(parent_mod->node_output_aux_bs32_p);
-		for (int i = 0; i < instance_mod->n_outputs; i++) {
-			int node_index = get_node_index(parent_mod, p, i);
-			if (bs32_test(node_bs32, node_index)) {
-				outcome_request_output_set(key.full_outcome_request_bs32_p, i);
-			}
-		}
-		// state is always in full outcome request
-		outcome_request_state_set(key.full_outcome_request_bs32_p);
 	}
 
 	int did_insert = 0;
-	uint32_t instance_function_id = produce_fnkey_function_id(&key, &did_insert);
+	uint32_t produced_substance_id = produce_substance_id_for_key(&key, &did_insert);
+
+	zvm_assert((lookup_only == 0 || did_insert == 0) && "not expecting insert for lookup-only calls");
+
 	if (!did_insert) {
-		// no insert; retract allocations
+		// no insert; rollback allocations
 		zvm_arrsetlen(ZVM_PRG->buf, buftop0);
-	} else {
 	}
 
-	// keep pointer values valid
-	*update_fn = pfn = resolve_function_id(parent_function_id);
+	// keep pointers valid...
 	*update_queue = bufp(queue_p);
 
-	// set up potential chain by storing function id in instance->u32 map
-	fn_instance_u32_map_set(pfn, p, instance_function_id);
-
-	return instance_function_id;
+	return produced_substance_id;
 }
 
-static void copy_node_output_bs32_to_aux(struct zvm_module* mod)
+static void process_substance(uint32_t substance_id)
 {
-	bs32_copy(mod->n_node_outputs, bufp(mod->node_output_aux_bs32_p), bufp(mod->node_output_bs32_p));
-}
+	uint32_t eventual_sequence_p = buftop();
 
-static uint32_t fn_find_prev_function_id(struct zvm_function* fn, uint32_t p)
-{
-	// XXX is this correct...? can't call chain continuation be arbitrarily
-	// deep... ?
-
-	for (;;) {
-		uint32_t prev_function_id = fn_instance_u32_map_get(fn, p);
-		if (prev_function_id != ZVM_NIL_ID) {
-			return prev_function_id;
-		}
-
-		if (fn->key.prev_function_id == ZVM_NIL_ID) {
-			break;
-		}
-
-		fn = resolve_function_id(fn->key.prev_function_id);
-	}
-
-	return ZVM_NIL_ID;
-}
-
-static void emit_function(uint32_t function_id)
-{
-	struct zvm_fnkey fnkey = resolve_function_id(function_id)->key;
-	struct zvm_module* mod = &ZVM_PRG->modules[fnkey.module_id];
-
-	#if 0
-	// calculate future outcome request set, which is the full outcome request
-	// minus the chain of outcome requests
-	const int outcome_request_sz = get_module_outcome_request_sz(mod);
-	uint32_t future_outcome_request_p = bs32_alloc(outcome_request_sz);
-	bs32_copy(outcome_request_sz, bufp(future_outcome_request_p), bufp(fnkey.full_outcome_request_bs32_p));
-	{
-		struct zvm_fnkey* fk = &fnkey;
-		for (;;) {
-			bs32_sub_inplace(outcome_request_sz, bufp(future_outcome_request_p), bufp(fk->outcome_request_bs32_p));
-			if (fk->prev_function_id == ZVM_NIL_ID) {
-				break;
-			}
-			fk = &ZVM_PRG->functions[fk->prev_function_id].key;
-		}
-	}
-	#endif
+	struct zvm_substance_key key = resolve_substance_id(substance_id)->key;
+	struct zvm_module* mod = &ZVM_PRG->modules[key.module_id];
 
 	clear_node_visit_set(mod);
 
+	int n_drains = 0;
+	int n_outcomes = 0;
+	uint32_t drains_p;
+	uint32_t outcomes_p;
+
 	// find drains ...
 	{
-		struct zvm_function* fn = resolve_function_id(function_id);
-		fn->n_drains = 0;
-		fn->drains_p = buftop();
+		drains_p = buftop();
 
 		for (int output_index = 0; output_index < mod->n_outputs; output_index++) {
-			if (!outcome_request_output_test(fnkey.outcome_request_bs32_p, output_index)) {
+			if (!outcome_request_output_test(key.outcome_request_bs32_p, output_index)) {
 				continue;
 			}
-			add_drain(function_id, ZVM_NIL_P, output_index);
+			add_drain(substance_id, ZVM_NIL_P, output_index);
 		}
 
-		if (outcome_request_state_test(fnkey.outcome_request_bs32_p)) {
+		if (outcome_request_state_test(key.outcome_request_bs32_p)) {
 			uint32_t p = mod->code_begin_p;
 			const uint32_t p_end = mod->code_end_p;
 			while (p < p_end) {
 				uint32_t code = *bufp(p);
 				int op = code & ZVM_OP_MASK;
 				if (op == ZVM_OP(UNIT_DELAY)) {
-					add_drain(function_id, p, 0);
+					add_drain(substance_id, p, 0);
 				} else if (op == ZVM_OP(INSTANCE)) {
 					int module_id = code >> ZVM_OP_BITS;
 					zvm_assert(zvm__is_valid_module_id(module_id));
@@ -1051,7 +916,7 @@ static void emit_function(uint32_t function_id)
 						uint32_t* ibs = get_state_input_dep_bs32(mod2);
 						for (int i = 0; i < n_inputs; i++) {
 							if (bs32_test(ibs, i)) {
-								add_drain(function_id, p, i);
+								add_drain(substance_id, p, i);
 							}
 						}
 					}
@@ -1063,42 +928,40 @@ static void emit_function(uint32_t function_id)
 
 		// sort and compact drain array by removing duplicates
 
-		const int n_drains_with_dupes = (buftop() - fn->drains_p) / DROUT_LEN;
+		const int n_drains_with_dupes = (buftop() - drains_p) / DROUT_LEN;
 		qsort(
-			bufp(fn->drains_p),
+			bufp(drains_p),
 			n_drains_with_dupes,
 			DROUT_SZ,
 			drout_compar);
 
-		uint32_t p_read = fn->drains_p;
-		uint32_t p_write = fn->drains_p;
+		uint32_t read_p = drains_p;
+		uint32_t write_p = drains_p;
 		uint32_t p_end = buftop();
 
-		while (p_read < p_end) {
+		while (read_p < p_end) {
 
-			if (p_read != p_write) {
-				memcpy(bufp(p_write), bufp(p_read), DROUT_SZ);
+			if (read_p != write_p) {
+				memcpy(bufp(write_p), bufp(read_p), DROUT_SZ);
 			}
 
-			uint32_t p0 = p_read;
+			uint32_t p0 = read_p;
 			do {
-				p_read += DROUT_LEN;
-			} while (p_read < p_end && drout_compar(bufp(p0), bufp(p_read)) == 0);
+				read_p += DROUT_LEN;
+			} while (read_p < p_end && drout_compar(bufp(p0), bufp(read_p)) == 0);
 
-			p_write += DROUT_LEN;
+			write_p += DROUT_LEN;
 		}
-		zvm_assert(p_read == p_end);
+		zvm_assert(read_p == p_end);
 
-		fn->n_drains = (p_write - fn->drains_p) / DROUT_LEN;
+		n_drains = (write_p - drains_p) / DROUT_LEN;
 
-		zvm_arrsetlen(ZVM_PRG->buf, p_write);
+		zvm_arrsetlen(ZVM_PRG->buf, write_p);
 	}
 
 	// find outcomes ...
 	{
-		struct zvm_function* fn = resolve_function_id(function_id);
-		fn->n_outcomes = 0;
-		fn->outcomes_p = buftop();
+		outcomes_p = buftop();
 
 		// as a side effect of finding drains, node_output_bs32_p has
 		// 1's for all node outputs visited; for each instance output,
@@ -1118,11 +981,11 @@ static void emit_function(uint32_t function_id)
 				continue;
 			}
 
-			fn->n_outcomes++;
+			n_outcomes++;
 			push_drout(p, node_output[1]);
 		}
 
-		if (outcome_request_state_test(fnkey.outcome_request_bs32_p)) {
+		if (outcome_request_state_test(key.outcome_request_bs32_p)) {
 			// add state outcome requests
 			uint32_t p = mod->code_begin_p;
 			const uint32_t p_end = mod->code_end_p;
@@ -1134,7 +997,7 @@ static void emit_function(uint32_t function_id)
 					zvm_assert(zvm__is_valid_module_id(module_id));
 					struct zvm_module* instance_mod = &ZVM_PRG->modules[module_id];
 					if (module_has_state(instance_mod)) {
-						fn->n_outcomes++;
+						n_outcomes++;
 						push_drout(p, ZVM_NIL_ID);
 					}
 				}
@@ -1145,105 +1008,50 @@ static void emit_function(uint32_t function_id)
 			// NOTE: assumption here that drouts only require
 			// sorting when request_state is true
 			qsort(
-				bufp(fn->outcomes_p),
-				fn->n_outcomes,
+				bufp(outcomes_p),
+				n_outcomes,
 				DROUT_SZ,
 				drout_compar);
-		}
-	}
-
-	{
-		// populate aux visit set with traces from the full outcome request.
-		// since this visit set is a superset of the set generated by
-		// the "normal" outcome request, we'll memcpy it and save
-		// ourselves some tracing work.
-
-		copy_node_output_bs32_to_aux(mod);
-
-		struct tracer tr = {
-			.mod = mod,
-			.use_aux_visit_set = 1,
-		};
-
-		for (int output_index = 0; output_index < mod->n_outputs; output_index++) {
-			if (!outcome_request_output_test(fnkey.full_outcome_request_bs32_p, output_index)) {
-				continue;
-			}
-			if (outcome_request_output_test(fnkey.outcome_request_bs32_p, output_index)) {
-				// should already be in bitset due to copy, so
-				// skip (skipping is almost redundant because
-				// the visit set should halt the trace very
-				// early?)
-				continue;
-			}
-			trace(&tr, bufp(mod->outputs_p)[output_index]);
-		}
-
-		zvm_assert(outcome_request_state_test(fnkey.full_outcome_request_bs32_p) && "assuming state update is always part of full request");
-
-		if (!outcome_request_state_test(fnkey.outcome_request_bs32_p)) { // only if not already traced...
-			uint32_t p = mod->code_begin_p;
-			const uint32_t p_end = mod->code_end_p;
-			while (p < p_end) {
-				uint32_t code = *bufp(p);
-				int op = code & ZVM_OP_MASK;
-				if (op == ZVM_OP(UNIT_DELAY)) {
-					trace(&tr, *bufp(zvm__arg_index(p, 0)));
-				} else if (op == ZVM_OP(INSTANCE)) {
-					int module_id = code >> ZVM_OP_BITS;
-					zvm_assert(zvm__is_valid_module_id(module_id));
-					struct zvm_module* instance_mod = &ZVM_PRG->modules[module_id];
-					if (module_has_state(instance_mod)) {
-						int n_inputs = instance_mod->n_inputs;
-						uint32_t* ibs = get_state_input_dep_bs32(instance_mod);
-						for (int i = 0; i < n_inputs; i++) {
-							if (bs32_test(ibs, i)) {
-								trace(&tr, *bufp(zvm__arg_index(p, i)));
-							}
-						}
-					}
-				}
-				p += get_op_length(p);
-			}
-			zvm_assert(p == p_end);
 		}
 	}
 
 	// initialize counters and decrement lists
 
 	for (int pass = 0; pass < 2; pass++) {
-		struct zvm_function* fn = resolve_function_id(function_id);
-		const int n_drains = fn->n_drains;
-		const int n_outcomes = fn->n_outcomes;
-
 		if (pass == 1) {
 			// reset counters; used for indexing when writing
 			// decrement list and are thus reinitialized
 
 			for (int i = 0; i < n_drains; i++) {
-				uint32_t* drain = bufp(fn->drains_p + i*DROUT_LEN);
+				uint32_t* drain = bufp(drains_p + i*DROUT_LEN);
 				drain[DROUT_DECR_LIST_N] = 0;
 			}
 
 			for (int i = 0; i < n_outcomes; i++) {
-				uint32_t* outcome = bufp(fn->outcomes_p + i*DROUT_LEN);
+				uint32_t* outcome = bufp(outcomes_p + i*DROUT_LEN);
 				outcome[DROUT_DECR_LIST_N] = 0;
 			}
 		}
 
 		for (int i = 0; i < n_drains; i++) {
-			uint32_t* drain = bufp(fn->drains_p + i*DROUT_LEN);
+			uint32_t* drain = bufp(drains_p + i*DROUT_LEN);
+			struct drain_to_output_instance_output_visitor_usr usr = {
+				.n_outcomes = n_outcomes,
+				.outcomes_p = outcomes_p,
+			};
 			struct tracer tr = {
 				.mod = mod,
-				.function_id = function_id,
+				.substance_id = substance_id,
 				.break_at_instance = 1, // stop at instance outputs
-				.usr = (pass == 0)
-					? (void*)drain
-					: (void*)&i,
-				.instance_output_visitor = (pass == 0)
-					? drain_to_output_instance_output_visitor_count
-					: drain_to_output_instance_output_visitor_write,
+				.usr = &usr,
 			};
+			if (pass == 0) {
+				tr.instance_output_visitor = drain_to_output_instance_output_visitor_count;
+				usr.drain = drain;
+			} else {
+				tr.instance_output_visitor = drain_to_output_instance_output_visitor_write;
+				usr.setp = i;
+			}
 			uint32_t p = (drain[DROUT_P] == ZVM_NIL_P)
 				? bufp(tr.mod->outputs_p)[drain[DROUT_INDEX]]
 				: *bufp(zvm__arg_index(drain[DROUT_P], drain[DROUT_INDEX]));
@@ -1252,7 +1060,7 @@ static void emit_function(uint32_t function_id)
 		}
 
 		for (int i = 0; i < n_outcomes; i++) {
-			uint32_t* outcome = bufp(fn->outcomes_p + i*DROUT_LEN);
+			uint32_t* outcome = bufp(outcomes_p + i*DROUT_LEN);
 			uint32_t code = *bufp(outcome[DROUT_P]);
 			int op = code & ZVM_OP_MASK;
 			zvm_assert(op == ZVM_OP(INSTANCE));
@@ -1266,7 +1074,7 @@ static void emit_function(uint32_t function_id)
 					continue;
 				}
 
-				uint32_t* drain = drout_find(fn->drains_p, n_drains, outcome[DROUT_P], j);
+				uint32_t* drain = drout_find(drains_p, n_drains, outcome[DROUT_P], j);
 
 				if (pass == 0) {
 					outcome[DROUT_COUNTER]++;
@@ -1285,13 +1093,13 @@ static void emit_function(uint32_t function_id)
 			uint32_t p = p0;
 
 			for (int i = 0; i < n_drains; i++) {
-				uint32_t* drain = bufp(fn->drains_p + i*DROUT_LEN);
+				uint32_t* drain = bufp(drains_p + i*DROUT_LEN);
 				drain[DROUT_DECR_LIST_P] = p;
 				p += drain[DROUT_DECR_LIST_N];
 			}
 
 			for (int i = 0; i < n_outcomes; i++) {
-				uint32_t* outcome = bufp(fn->outcomes_p + i*DROUT_LEN);
+				uint32_t* outcome = bufp(outcomes_p + i*DROUT_LEN);
 				outcome[DROUT_DECR_LIST_P] = p;
 				p += outcome[DROUT_DECR_LIST_N];
 			}
@@ -1300,278 +1108,317 @@ static void emit_function(uint32_t function_id)
 		}
 	}
 
-	int new_function_ids_begin = zvm_arrlen(ZVM_PRG->functions);
+	int new_substance_ids_begin = zvm_arrlen(ZVM_PRG->substances);
 
 	// initialize drain/outcome queue
-	const int n_drains = resolve_function_id(function_id)->n_drains;
-	const int n_outcomes = resolve_function_id(function_id)->n_outcomes;
 	const int queue_sz = n_drains+n_outcomes;
 	uint32_t queue_p = buftop();
 	(void)zvm_arradd(ZVM_PRG->buf, queue_sz);
 
-	{
-		// NOTE new values are pushed onto the underlying arrays, so be
-		// careful to keep these pointers fresh
-		struct zvm_function* fn = resolve_function_id(function_id);
-		uint32_t* queue = bufp(queue_p);
 
-		int queue_i = 0;
-		int queue_n = 0;
+	// NOTE new values are pushed onto the underlying arrays, so be
+	// careful to keep these pointers fresh
+	uint32_t* queue = bufp(queue_p);
 
-		for (int i = 0; i < n_drains; i++) {
-			uint32_t* drain = bufp(fn->drains_p + i*DROUT_LEN);
-			if (drain[DROUT_COUNTER] == 0) {
-				queue[queue_n++] = ENCODE_DRAIN(i);
-			}
+	int queue_i = 0;
+	int queue_n = 0;
 
+	for (int i = 0; i < n_drains; i++) {
+		uint32_t* drain = bufp(drains_p + i*DROUT_LEN);
+		if (drain[DROUT_COUNTER] == 0) {
+			queue[queue_n++] = ENCODE_DRAIN(i);
 		}
 
-		clear_node_visit_set(mod);
+	}
 
-		for (int i = 0; i < n_outcomes; i++) {
-			uint32_t* outcome = bufp(fn->outcomes_p + i*DROUT_LEN);
-			if (outcome[DROUT_COUNTER] == 0) {
-				queue[queue_n++] = ENCODE_OUTCOME(i);
+	clear_node_visit_set(mod);
+
+	for (int i = 0; i < n_outcomes; i++) {
+		uint32_t* outcome = bufp(outcomes_p + i*DROUT_LEN);
+		if (outcome[DROUT_COUNTER] == 0) {
+			queue[queue_n++] = ENCODE_OUTCOME(i);
+		}
+
+		uint32_t index = outcome[DROUT_INDEX];
+		if (index != ZVM_NIL_ID) {
+			// mark instance outcome nodes in visit set;
+			// used to detect if a sequence of instance
+			// output outcomes constitute a "non-fragmented
+			// call"
+			visit_node(mod, outcome[DROUT_P], index);
+		}
+	}
+
+	while (queue_i < queue_n) {
+		int has_drains = 0;
+		int has_outcomes = 0;
+
+		for (int i = queue_i; i < queue_n; i++) {
+			uint32_t qv = queue[i];
+			if (IS_DRAIN(qv)) {
+				has_drains = 1;
+				break;
 			}
-
-			uint32_t index = outcome[DROUT_INDEX];
-			if (index != ZVM_NIL_ID) {
-				// mark instance outcome nodes in visit set;
-				// used to detect if a sequence of instance
-				// output outcomes constitute a "non-fragmented
-				// call"
-				visit_node(mod, outcome[DROUT_P], index, 0);
+			if (IS_OUTCOME(qv)) {
+				has_outcomes = 1;
 			}
 		}
 
-		while (queue_i < queue_n) {
-			int has_drains = 0;
-			int has_outcomes = 0;
-			for (int i = queue_i; i < queue_n; i++) {
-				uint32_t qv = queue[i];
-				if (IS_DRAIN(qv)) {
-					has_drains = 1;
+		if (has_drains) {
+			// execute drains as long as they're available
+
+			qsort(&queue[queue_i], queue_n-queue_i, sizeof *queue, drain_outcome_compar);
+
+			for (; queue_i < queue_n; queue_i++) {
+				uint32_t qv = queue[queue_i];
+
+				if (IS_OUTCOME(qv)) break;
+
+				const int drain_index = GET_VALUE(qv);
+				uint32_t* drain = bufp(drains_p + drain_index*DROUT_LEN);
+
+				int n = drain[DROUT_DECR_LIST_N];
+				uint32_t p = drain[DROUT_DECR_LIST_P];
+				for (int i = 0; i < n; i++) {
+					const int outcome_index = *bufp(p+i);
+					uint32_t* outcome = bufp(outcomes_p + outcome_index*DROUT_LEN);
+					zvm_assert(outcome[DROUT_COUNTER] > 0);
+					outcome[DROUT_COUNTER]--;
+					if (outcome[DROUT_COUNTER] == 0) {
+						queue[queue_n++] = ENCODE_OUTCOME(outcome_index);
+					}
+				}
+			}
+			continue;
+		}
+
+		zvm_assert(!has_drains && has_outcomes);
+
+		// now there are only outcomes in the [queue_i;queue_n]
+		// interval.
+
+		compar_drouts = bufp(outcomes_p);
+		qsort(&queue[queue_i], queue_n-queue_i, sizeof *queue, queue_outcome_pi_compar);
+
+		#if 0
+		for (int i = queue_i; i < queue_n; i++) zvm_assert(IS_OUTCOME(queue[i]));
+		#endif
+
+		// look for full calls ...
+		int n_full_calls = 0;
+		for (int i = queue_i; i < queue_n; ) {
+			int pspan_length = queue_outcome_get_pspan_length(outcomes_p, &queue[i], queue_n-i, 0);
+
+			uint32_t p0 = bufp(outcomes_p + GET_VALUE(queue[i])*DROUT_LEN)[DROUT_P];
+			uint32_t code = *bufp(p0);
+			int op = code & ZVM_OP_MASK;
+			zvm_assert(op == ZVM_OP(INSTANCE));
+			int instance_module_id = code >> ZVM_OP_BITS;
+			zvm_assert(zvm__is_valid_module_id(instance_module_id));
+			struct zvm_module* instance_mod = &ZVM_PRG->modules[instance_module_id];
+
+			const int n_instance_outputs = instance_mod->n_outputs;
+			uint32_t* node_bs32 = get_node_output_bs32(mod);
+
+			// a call is "full" if the inferred outcome
+			// request is identical to the remaining
+			// outcome request
+			int is_full_call = 1;
+			int ii = 0;
+			int requesting_state = module_has_state(instance_mod) && outcome_request_state_test(key.outcome_request_bs32_p);
+			int n_checks = n_instance_outputs + (requesting_state ? 1 : 0);
+			for (int j = 0; j < n_checks; j++) {
+				const int is_output = (j < n_instance_outputs);
+				const int is_state  = (j == n_instance_outputs);
+
+				uint32_t expected_drout_index = 0;
+				if (is_output) {
+					int node_index = get_node_index(mod, p0, j);
+					if (!bs32_test(node_bs32, node_index)) {
+						continue;
+					}
+					expected_drout_index = j;
+				} else if (is_state) {
+					expected_drout_index = ZVM_NIL_ID;
+				} else {
+					zvm_assert(!"unreachable");
+				}
+
+				uint32_t* outcome = bufp(outcomes_p + GET_VALUE(queue[i + (ii++)])*DROUT_LEN);
+				zvm_assert(outcome[DROUT_P] == p0);
+				if (outcome[DROUT_INDEX] != expected_drout_index) {
+					is_full_call = 0;
 					break;
 				}
-				if (IS_OUTCOME(qv)) {
-					has_outcomes = 1;
-				}
 			}
 
-			if (has_drains) {
-				// execute drains as long as they're available
-
-				qsort(&queue[queue_i], queue_n-queue_i, sizeof *queue, drain_outcome_compar);
-
-				for (; queue_i < queue_n; queue_i++) {
-					uint32_t qv = queue[queue_i];
-
-					if (IS_OUTCOME(qv)) break;
-
-					const int drain_index = GET_VALUE(qv);
-					uint32_t* drain = bufp(fn->drains_p + drain_index*DROUT_LEN);
-
-					int n = drain[DROUT_DECR_LIST_N];
-					uint32_t p = drain[DROUT_DECR_LIST_P];
-					for (int i = 0; i < n; i++) {
-						const int outcome_index = *bufp(p+i);
-						uint32_t* outcome = bufp(fn->outcomes_p + outcome_index*DROUT_LEN);
-						zvm_assert(outcome[DROUT_COUNTER] > 0);
-						outcome[DROUT_COUNTER]--;
-						if (outcome[DROUT_COUNTER] == 0) {
-							queue[queue_n++] = ENCODE_OUTCOME(outcome_index);
-						}
-					}
-				}
-				continue;
+			if (is_full_call) {
+				zvm_assert(ii == pspan_length);
 			}
 
-			zvm_assert(!has_drains && has_outcomes);
 
-			// now there are only outcomes in the [queue_i;queue_n]
-			// interval.
+			if (is_full_call) n_full_calls++;
 
-			compar_drouts = bufp(fn->outcomes_p);
-			qsort(&queue[queue_i], queue_n-queue_i, sizeof *queue, queue_outcome_pi_compar);
-
-			#if 0
-			for (int i = queue_i; i < queue_n; i++) zvm_assert(IS_OUTCOME(queue[i]));
-			#endif
-
-			// look for full calls ...
-			int n_full_calls = 0;
-			for (int i = queue_i; i < queue_n; ) {
-				int pspan_length = queue_outcome_get_pspan_length(fn->outcomes_p, &queue[i], queue_n-i, 0);
-
-				uint32_t p0 = bufp(fn->outcomes_p + GET_VALUE(queue[i])*DROUT_LEN)[DROUT_P];
-				uint32_t code = *bufp(p0);
-				int op = code & ZVM_OP_MASK;
-				zvm_assert(op == ZVM_OP(INSTANCE));
-				int instance_module_id = code >> ZVM_OP_BITS;
-				zvm_assert(zvm__is_valid_module_id(instance_module_id));
-				struct zvm_module* instance_mod = &ZVM_PRG->modules[instance_module_id];
-
-				const int n_instance_outputs = instance_mod->n_outputs;
-				uint32_t* node_bs32 = get_node_output_bs32(mod);
-
-				// a call is "full" if the requested instance
-				// output set is identical to the sequence of
-				// outcome requests.  NOTE: a call can be "full"
-				// even if it's part of a function chain (i.e.
-				// when an instance is split into multiple
-				// functions) as long as it's the last call in
-				// the chain
-				int is_full_call = 1;
-				int ii = 0;
-				int requesting_state = module_has_state(instance_mod) && outcome_request_state_test(fnkey.outcome_request_bs32_p);
-				int n_checks = n_instance_outputs + (requesting_state ? 1 : 0);
-				for (int j = 0; j < n_checks; j++) {
-					const int is_output = (j < n_instance_outputs);
-					const int is_state  = (j == n_instance_outputs);
-
-					uint32_t expected_drout_index = 0;
-					if (is_output) {
-						int node_index = get_node_index(mod, p0, j);
-						if (!bs32_test(node_bs32, node_index)) {
-							continue;
-						}
-						expected_drout_index = j;
-					} else if (is_state) {
-						expected_drout_index = ZVM_NIL_ID;
-					} else {
-						zvm_assert(!"unreachable");
-					}
-
-					uint32_t* outcome = bufp(fn->outcomes_p + GET_VALUE(queue[i + (ii++)])*DROUT_LEN);
-					zvm_assert(outcome[DROUT_P] == p0);
-					if (outcome[DROUT_INDEX] != expected_drout_index) {
-						is_full_call = 0;
-						break;
-					}
-				}
-
-				if (is_full_call) {
-					zvm_assert(ii == pspan_length);
-				}
-
-
-				if (is_full_call) n_full_calls++;
-
-				for (int j = 0; j < pspan_length; j++) {
-					uint32_t* outcome = bufp(fn->outcomes_p + GET_VALUE(queue[i+j])*DROUT_LEN);
-					outcome[DROUT_USR] = is_full_call;
-				}
-
-				i += pspan_length;
+			for (int j = 0; j < pspan_length; j++) {
+				uint32_t* outcome = bufp(outcomes_p + GET_VALUE(queue[i+j])*DROUT_LEN);
+				outcome[DROUT_USR] = is_full_call;
 			}
 
-			if (n_full_calls > 0) {
-				{
-					// place full calls in beginning of queue
-					compar_drouts = bufp(fn->outcomes_p);
-					qsort(&queue[queue_i], queue_n-queue_i, sizeof *queue, queue_outcome_full_compar);
-				}
+			i += pspan_length;
+		}
 
-				int queue_n0 = queue_n;
-				while (n_full_calls > 0 && queue_i < queue_n0) {
-					// NOTE important pointer fetches;
-					// ack_instance_function() pushes on
-					// both buf and the functions array, so
-					// these pointers may not be valid
-					// after the call
-					int pspan_length = queue_outcome_get_pspan_length(fn->outcomes_p, &queue[queue_i], queue_n0-queue_i, 0);
+		if (n_full_calls > 0) {
+			{
+				// place full calls in beginning of queue
+				compar_drouts = bufp(outcomes_p);
+				qsort(&queue[queue_i], queue_n-queue_i, sizeof *queue, queue_outcome_full_compar);
+			}
 
-					uint32_t p0 = bufp(fn->outcomes_p + GET_VALUE(queue[queue_i])*DROUT_LEN)[DROUT_P];
+			int queue_n0 = queue_n;
+			while (n_full_calls > 0 && queue_i < queue_n0) {
+				int pspan_length = queue_outcome_get_pspan_length(outcomes_p, &queue[queue_i], queue_n0-queue_i, 0);
 
-					ack_instance_function(
-						function_id,
-						p0,
-						queue_i,
-						pspan_length,
-						fn_find_prev_function_id(fn, p0),
-						queue_p,
-						&queue_n,
-						&fn, &queue);
+				uint32_t p0 = bufp(outcomes_p + GET_VALUE(queue[queue_i])*DROUT_LEN)[DROUT_P];
 
-					queue_i += pspan_length;
-					n_full_calls--;
-				}
-
-				zvm_assert((n_full_calls == 0) && "expected to handle all full calls");
-
-			} else {
-				// no full calls to choose from, so pick a
-				// partial call. it seems complicated to figure
-				// out which partial call is the best pick,
-				// complicated as in O(n!) maybe? however,
-				// reaching this point indicates that instance
-				// splitting is inevitable.
-
-				// current attempt at a heuristic solution is
-				// to pick the first partial call and continue
-				// :)
-
-				int pspan_length = queue_outcome_get_pspan_length(fn->outcomes_p, &queue[queue_i], queue_n-queue_i, 0);
-				uint32_t p0 = bufp(fn->outcomes_p + GET_VALUE(queue[queue_i])*DROUT_LEN)[DROUT_P];
-				ack_instance_function(
-					function_id,
+				ack_substance(
 					p0,
 					queue_i,
 					pspan_length,
-					fn_find_prev_function_id(fn, p0),
 					queue_p,
 					&queue_n,
-					&fn, &queue);
+					drains_p,
+					outcomes_p,
+					&queue,
+					0);
 
 				queue_i += pspan_length;
+				n_full_calls--;
 			}
 
-		}
+			zvm_assert((n_full_calls == 0) && "expected to handle all full calls");
 
-		zvm_assert(queue_i == queue_sz);
-		zvm_assert(queue_n == queue_sz);
-	}
-
-	// emit new functions created by ack_instance_function()
-	int new_function_ids_end = zvm_arrlen(ZVM_PRG->functions);
-	for (int new_function_id = new_function_ids_begin; new_function_id < new_function_ids_end; new_function_id++) {
-		emit_function(new_function_id);
-	}
-
-	// FIXME instance splitting is only done locally... i.e. new call
-	// chains are always created from scratch when an instance is first
-	// seen during emit_function(). rather, a call chain from a previous
-	// emit_function() may have to be continued if its parent
-	// emit_function() itself is part of a call chain?
-
-	// TODO code emission... soon?
-
-	#if 0
-	#ifdef VERBOSE_DEBUG
-	uint32_t* queue = bufp(queue_p);
-	printf("PLAN (function %d)\n", function_id);
-	struct zvm_function* fn = resolve_function_id(function_id);
-	for (int i = 0; i < queue_sz; ) {
-		uint32_t qv = queue[i];
-		uint32_t v = GET_VALUE(qv);
-		if (IS_DRAIN(qv)) {
-			printf("  DRAIN %d\n", v);
-			i++;
-		} else if (IS_OUTCOME(qv)) {
-			int pspan_length = queue_outcome_get_pspan_length(fn->outcomes_p, &queue[i], queue_sz - i, 1);
-			printf("  OUTPUT");
-			for (int j = 0; j < pspan_length; j++) {
-				printf(" %d", GET_VALUE(queue[i+j]));
-			}
-			printf("\n");
-			i += pspan_length;
 		} else {
-			zvm_assert(!"unreachable");
+			// no full calls to choose from, so pick a
+			// partial call. it seems complicated to figure
+			// out which partial call is the best pick,
+			// complicated as in O(n!) maybe? however,
+			// reaching this point indicates that instance
+			// splitting is inevitable.
+
+			// current attempt at a heuristic solution is
+			// to pick the first partial call and continue
+			// :)
+
+			int pspan_length = queue_outcome_get_pspan_length(outcomes_p, &queue[queue_i], queue_n-queue_i, 0);
+			uint32_t p0 = bufp(outcomes_p + GET_VALUE(queue[queue_i])*DROUT_LEN)[DROUT_P];
+
+			ack_substance(
+				p0,
+				queue_i,
+				pspan_length,
+				queue_p,
+				&queue_n,
+				drains_p,
+				outcomes_p,
+				&queue,
+				0);
+
+			queue_i += pspan_length;
 		}
+
 	}
-	printf("ENDPLAN\n\n");
-	#endif
-	#endif
+
+	zvm_assert(queue_i == queue_sz);
+	zvm_assert(queue_n == queue_sz);
+
+	// go through queue again; this time construct "the sequence"; I'd
+	// prefer constructing in the loop above, but ack_substance() *also*
+	// mutates buf
+
+	uint32_t tmp_sequence_p = buftop();
+
+	queue_i = 0;
+	zvm_assert(queue == bufp(queue_p) && "sanity check failed; queue ptr was NOT kept fresh");
+	while (queue_i < queue_n) {
+		uint32_t qv = queue[queue_i];
+		if (IS_DRAIN(qv)) {
+			queue_i++;
+			continue;
+		}
+
+		int pspan_length = queue_outcome_get_pspan_length(outcomes_p, &queue[queue_i], queue_n-queue_i, 1);
+		zvm_assert(pspan_length > 0);
+
+		uint32_t p0 = bufp(outcomes_p + GET_VALUE(queue[queue_i])*DROUT_LEN)[DROUT_P];
+
+		const uint32_t top0 = buftop();
+		const int n_substances0 = zvm_arrlen(ZVM_PRG->substances);
+
+		uint32_t ack_substance_id = ack_substance(
+			p0,
+			queue_i,
+			pspan_length,
+			queue_p,
+			&queue_n,
+			drains_p,
+			outcomes_p,
+			&queue,
+			1);
+
+		zvm_assert((buftop() == top0) && (zvm_arrlen(ZVM_PRG->substances) == n_substances0) && "expected ack_substance() to FIND, not INSERT, substance; value mutation indicates this is not the case");
+
+		substance_sequence_push(p0, ack_substance_id);
+
+		// XXX TODO what about unit delays?
+
+		queue_i += pspan_length;
+	}
+
+	// buf has been used for temporary data necessary to construct the
+	// sequence; to "free" the temporary data, move the sequence to the
+	// "top", and downsize buf to fit
+	{
+		#if 0
+		const int sequence_len = (buftop() - tmp_sequence_p) >> 1;
+		const size_t sequence_sz = 2 * sequence_len * sizeof(*bufp(eventual_sequence_p));
+		memmove(bufp(eventual_sequence_p), bufp(tmp_sequence_p), sequence_sz);
+		zvm_arrsetlen(ZVM_PRG->buf, eventual_sequence_p + sequence_sz);
+		struct zvm_substance* sb = resolve_substance_id(substance_id);
+		sb->sequence_len = sequence_len;
+		sb->sequence_p = eventual_sequence_p;
+		#else
+		const int sequence_len = (buftop() - tmp_sequence_p) >> 1;
+		//const size_t sequence_sz = 2 * sequence_len * sizeof(*bufp(eventual_sequence_p));
+		//memmove(bufp(eventual_sequence_p), bufp(tmp_sequence_p), sequence_sz);
+		//zvm_arrsetlen(ZVM_PRG->buf, eventual_sequence_p + sequence_sz);
+		struct zvm_substance* sb = resolve_substance_id(substance_id);
+		sb->sequence_len = sequence_len;
+		sb->sequence_p = tmp_sequence_p;
+		#endif
+
+		#if 1
+		#ifdef VERBOSE_DEBUG
+		printf("Sequence for substance #%d:\n", substance_id);
+		for (int i = 0; i < sequence_len; i++) {
+			uint32_t* pair = bufp(eventual_sequence_p + (i<<1));
+			uint32_t p = pair[0];
+			uint32_t substance_id = pair[1];
+			if (substance_id == ZVM_NIL_ID) {
+				printf("  p=%d substance_id=<nil> (unit delay)\n", p);
+			} else {
+				printf("  p=%d substance_id=%d\n", p, substance_id);
+			}
+		}
+		#endif
+		#endif
+	}
+
+	// finally, recursively process the new substances...
+
+	int new_substance_ids_end = zvm_arrlen(ZVM_PRG->substances);
+	for (int new_substance_id = new_substance_ids_begin; new_substance_id < new_substance_ids_end; new_substance_id++) {
+		process_substance(new_substance_id);
+	}
 }
 
 void zvm_end_program(uint32_t main_module_id)
@@ -1583,41 +1430,28 @@ void zvm_end_program(uint32_t main_module_id)
 
 	const int outcome_request_sz = get_module_outcome_request_sz(mod);
 
-	struct zvm_fnkey main_key = {
+	struct zvm_substance_key main_key = {
 		.module_id = main_module_id,
-		.full_outcome_request_bs32_p = bs32_alloc(outcome_request_sz),
 		.outcome_request_bs32_p = bs32_alloc(outcome_request_sz),
-		.prev_function_id = ZVM_NIL_ID,
 	};
 
-	bs32_fill(outcome_request_sz, bufp(main_key.full_outcome_request_bs32_p), 1);
 	bs32_fill(outcome_request_sz, bufp(main_key.outcome_request_bs32_p), 1);
 
-	emit_function(ZVM_PRG->main_function_id = produce_fnkey_function_id(&main_key, NULL));
+	process_substance(ZVM_PRG->main_substance_id = produce_substance_id_for_key(&main_key, NULL));
 
 	int buf_sz_after_compile = buftop();
 
 	#ifdef VERBOSE_DEBUG
 	printf("=======================================\n");
-	const int n_functions = zvm_arrlen(ZVM_PRG->functions);
-	printf("n_functions:               %d\n", n_functions);
-	for (int i = 0; i < n_functions; i++) {
-		struct zvm_fnkey* key = &ZVM_PRG->functions[i].key;
+	const int n_substances = zvm_arrlen(ZVM_PRG->substances);
+	printf("n_substances:               %d\n", n_substances);
+	for (int i = 0; i < n_substances; i++) {
+		struct zvm_substance_key* key = &ZVM_PRG->substances[i].key;
 		printf("   F[%d] :: module_id=%d", i , key->module_id);
-
-		printf(" prev_function_id=");
-		if (key->prev_function_id == ZVM_NIL_ID) {
-			printf("<nil>");
-		} else {
-			printf("%d", key->prev_function_id);
-		}
 
 		const int outcome_request_sz = get_module_outcome_request_sz(&ZVM_PRG->modules[key->module_id]);
 
-		printf(" full=");
-		bs32_print(outcome_request_sz, bufp(key->full_outcome_request_bs32_p));
-
-		printf(" this=");
+		printf(" rq=");
 		bs32_print(outcome_request_sz, bufp(key->outcome_request_bs32_p));
 
 		printf("\n");

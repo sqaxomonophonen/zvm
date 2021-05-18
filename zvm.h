@@ -78,47 +78,36 @@ struct zvm_module {
 	int n_node_outputs;
 	uint32_t node_outputs_p;
 	uint32_t node_output_bs32_p;
-	uint32_t node_output_aux_bs32_p;
 
 	uint32_t input_bs32s_p;
-
-	int n_instances;
-	uint32_t instances_p;
 
 	int n_bits;
 	int refcount;
 };
 
-struct zvm_fnkey {
+struct zvm_substance_key {
 	uint32_t module_id;
-	uint32_t full_outcome_request_bs32_p;
 	uint32_t outcome_request_bs32_p;
-	uint32_t prev_function_id;
 };
 
-struct zvm_fnkeyval {
-	struct zvm_fnkey key;
-	uint32_t function_id;
+struct zvm_substance_keyval {
+	struct zvm_substance_key key;
+	uint32_t substance_id;
 };
 
-struct zvm_function {
-	struct zvm_fnkey key;
-	int n_drains;
-	uint32_t drains_p;
-	int n_outcomes;
-	uint32_t outcomes_p;
-	int n_instance_u32_values;
-	uint32_t instance_u32_map_p;
+struct zvm_substance {
+	struct zvm_substance_key key;
+	uint32_t sequence_len;
+	uint32_t sequence_p;
 };
 
 struct zvm_program {
 	struct zvm_module* modules;
 	uint32_t main_module_id;
-	uint32_t main_function_id;
+	uint32_t main_substance_id;
 	uint32_t* buf;
-
-	struct zvm_fnkeyval* fnkeyvals;
-	struct zvm_function* functions;
+	struct zvm_substance_keyval* substance_keyvals;
+	struct zvm_substance* substances;
 };
 
 struct zvm {
