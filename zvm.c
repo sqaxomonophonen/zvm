@@ -1108,7 +1108,7 @@ static void process_substance(uint32_t substance_id)
 		}
 	}
 
-	int new_substance_ids_begin = zvm_arrlen(ZVM_PRG->substances);
+	const int new_substance_ids_begin = zvm_arrlen(ZVM_PRG->substances);
 
 	// initialize drain/outcome queue
 	const int queue_sz = n_drains+n_outcomes;
@@ -1325,7 +1325,6 @@ static void process_substance(uint32_t substance_id)
 
 			queue_i += pspan_length;
 		}
-
 	}
 
 	zvm_assert(queue_i == queue_sz);
@@ -1338,8 +1337,9 @@ static void process_substance(uint32_t substance_id)
 	uint32_t tmp_sequence_p = buftop();
 
 	queue_i = 0;
-	zvm_assert(queue == bufp(queue_p) && "sanity check failed; queue ptr was NOT kept fresh");
 	while (queue_i < queue_n) {
+		zvm_assert(queue == bufp(queue_p) && "sanity check failed; queue ptr was NOT kept fresh");
+
 		uint32_t qv = queue[queue_i];
 		if (IS_DRAIN(qv)) {
 			queue_i++;
@@ -1374,11 +1374,14 @@ static void process_substance(uint32_t substance_id)
 		queue_i += pspan_length;
 	}
 
+	// XXX the bug here is that buf is ALSO used for outcome_request_bs32_p
+	// which is NOT temporary storage... (but is that the ONLY buf-related
+	// bug?)
+
 	// buf has been used for temporary data necessary to construct the
 	// sequence; to "free" the temporary data, move the sequence to the
 	// "top", and downsize buf to fit
 	{
-		#if 0
 		const int sequence_len = (buftop() - tmp_sequence_p) >> 1;
 		const size_t sequence_sz = 2 * sequence_len * sizeof(*bufp(eventual_sequence_p));
 		memmove(bufp(eventual_sequence_p), bufp(tmp_sequence_p), sequence_sz);
@@ -1386,17 +1389,8 @@ static void process_substance(uint32_t substance_id)
 		struct zvm_substance* sb = resolve_substance_id(substance_id);
 		sb->sequence_len = sequence_len;
 		sb->sequence_p = eventual_sequence_p;
-		#else
-		const int sequence_len = (buftop() - tmp_sequence_p) >> 1;
-		//const size_t sequence_sz = 2 * sequence_len * sizeof(*bufp(eventual_sequence_p));
-		//memmove(bufp(eventual_sequence_p), bufp(tmp_sequence_p), sequence_sz);
-		//zvm_arrsetlen(ZVM_PRG->buf, eventual_sequence_p + sequence_sz);
-		struct zvm_substance* sb = resolve_substance_id(substance_id);
-		sb->sequence_len = sequence_len;
-		sb->sequence_p = tmp_sequence_p;
-		#endif
 
-		#if 1
+		#if 0
 		#ifdef VERBOSE_DEBUG
 		printf("Sequence for substance #%d:\n", substance_id);
 		for (int i = 0; i < sequence_len; i++) {
