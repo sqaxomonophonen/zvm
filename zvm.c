@@ -1450,9 +1450,9 @@ static void analyze_substance_rec(int substance_id)
 	//    sense of, but that's like "-O0 -g")
 }
 
-static void analyze_substance(int root_substance_id)
+static void analyze_main_substance(int main_substance_id)
 {
-	analyze_substance_rec(root_substance_id);
+	analyze_substance_rec(main_substance_id);
 
 	#ifdef VERBOSE_DEBUG
 	const int n_substances = zvm_arrlen(ZVM_PRG->substances);
@@ -1463,6 +1463,15 @@ static void analyze_substance(int root_substance_id)
 	}
 	printf("\n");
 	#endif
+}
+
+static void transmogrify_substance_rec(int substance_id)
+{
+}
+
+static void transmogrify_main_substance(int main_substance_id)
+{
+	transmogrify_substance_rec(main_substance_id);
 }
 
 void zvm_end_program(uint32_t main_module_id)
@@ -1487,7 +1496,9 @@ void zvm_end_program(uint32_t main_module_id)
 
 	int buf_sz_after_process_substance = buftop();
 
-	analyze_substance(ZVM_PRG->main_substance_id);
+	analyze_main_substance(ZVM_PRG->main_substance_id);
+
+	transmogrify_main_substance(ZVM_PRG->main_substance_id);
 
 	#ifdef VERBOSE_DEBUG
 	printf("=======================================\n");
