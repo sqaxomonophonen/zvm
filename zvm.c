@@ -501,10 +501,13 @@ int zvm_end_module()
 		memset(input_bs32s, 0, sizeof(*input_bs32s) * n_input_bs32s * n_words);
 	}
 
+	const int module_id = zvm_arrlen(ZVM_PRG->modules) - 1;
+
 	// trace state input-dependencies
 	uint32_t* state_input_dep_bs32   = get_state_input_dep_bs32(mod);
 	trace_state_deps(state_input_dep_bs32, mod);
 	#ifdef VERBOSE_DEBUG
+	printf("MODULE %d\n", module_id);
 	printf("state: "); bs32_print(mod->n_inputs, state_input_dep_bs32); printf("\n");
 	#endif
 
@@ -516,8 +519,11 @@ int zvm_end_module()
 		printf("o[%d]: ", i); bs32_print(mod->n_inputs, output_input_dep_bs32); printf("\n");
 		#endif
 	}
+	#ifdef VERBOSE_DEBUG
+	printf("\n");
+	#endif
 
-	return zvm_arrlen(ZVM_PRG->modules) - 1;
+	return module_id;
 }
 
 static int substance_key_cmp(const void* va, const void* vb)

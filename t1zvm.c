@@ -178,6 +178,7 @@ int main(int argc, char** argv)
 	MOD(ram256);
 	MOD(ram4k);
 	MOD(ram64k);
+	printf("\n");
 	#undef MOD
 
 	//zvm_begin_module(0, 0, 0);
