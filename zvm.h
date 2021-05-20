@@ -100,6 +100,7 @@ struct zvm_substance {
 	uint32_t sequence_len;
 	uint32_t sequence_p;
 	int transmogrified;
+	int refcount;
 };
 
 struct zvm_program {

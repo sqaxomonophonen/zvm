@@ -1410,9 +1410,11 @@ static void process_substance(uint32_t substance_id)
 	}
 }
 
-static void transmogrify_substance(int substance_id)
+static void transmogrify_substance_rec(int substance_id)
 {
 	struct zvm_substance* sb = &ZVM_PRG->substances[substance_id];
+
+	sb->refcount++;
 
 	if (sb->transmogrified) return;
 	sb->transmogrified = 1;
@@ -1425,13 +1427,22 @@ static void transmogrify_substance(int substance_id)
 		if (substance_id == ZVM_NIL_ID) {
 			continue;
 		}
-		transmogrify_substance(substance_id);
+		transmogrify_substance_rec(substance_id);
 	}
+}
 
-	const int has_state = outcome_request_state_test(sb->key.outcome_request_bs32_p);
+static void transmogrify_substance(int root_substance_id)
+{
+	transmogrify_substance_rec(root_substance_id);
 
 	#ifdef VERBOSE_DEBUG
-	printf("transmogrif; substance=%d; module=%d; state=%d\n", substance_id, sb->key.module_id, has_state);
+	const int n_substances = zvm_arrlen(ZVM_PRG->substances);
+	for (int i = 0; i < n_substances; i++) {
+		struct zvm_substance* sb = &ZVM_PRG->substances[i];
+		const int has_state = outcome_request_state_test(sb->key.outcome_request_bs32_p);
+		printf("transmogrif; substance=%d; module=%d; state=%d; refcount=%d\n", i, sb->key.module_id, has_state, sb->refcount);
+	}
+	printf("\n");
 	#endif
 }
 
@@ -1458,10 +1469,6 @@ void zvm_end_program(uint32_t main_module_id)
 	int buf_sz_after_process_substance = buftop();
 
 	transmogrify_substance(ZVM_PRG->main_substance_id);
-	#ifdef VERBOSE_DEBUG
-	printf("\n");
-	#endif
-
 
 	#ifdef VERBOSE_DEBUG
 	printf("=======================================\n");
