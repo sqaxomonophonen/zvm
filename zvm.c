@@ -1452,10 +1452,16 @@ static void analyze_substance_rec(int substance_id)
 
 static void analyze_main_substance(int main_substance_id)
 {
+	const int n_substances = zvm_arrlen(ZVM_PRG->substances);
+
+	for (int i = 0; i < n_substances; i++) {
+		struct zvm_substance* sb = &ZVM_PRG->substances[i];
+		sb->analyzed = 0;
+	}
+
 	analyze_substance_rec(main_substance_id);
 
 	#ifdef VERBOSE_DEBUG
-	const int n_substances = zvm_arrlen(ZVM_PRG->substances);
 	for (int i = 0; i < n_substances; i++) {
 		struct zvm_substance* sb = &ZVM_PRG->substances[i];
 		const int has_state = outcome_request_state_test(sb->key.outcome_request_bs32_p);
