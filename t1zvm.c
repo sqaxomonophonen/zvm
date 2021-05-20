@@ -167,10 +167,25 @@ int main(int argc, char** argv)
 	module_id_ram4k = emit_ram16(12, module_id_ram256);
 	module_id_ram64k = emit_ram16(16, module_id_ram4k);
 
+	#define MOD(name) printf("Module[" #name "]=%d\n", module_id_ ## name)
+	MOD(and);
+	MOD(or);
+	MOD(not);
+	MOD(decode4to16);
+	MOD(memory_bit);
+	MOD(memory_byte);
+	MOD(ram16);
+	MOD(ram256);
+	MOD(ram4k);
+	MOD(ram64k);
+	#undef MOD
+
 	//zvm_begin_module(0, 0, 0);
 	//uint32_t main_module_id = zvm_end_module();
 
 	zvm_end_program(module_id_ram64k);
+
+	
 
 	return EXIT_SUCCESS;
 }

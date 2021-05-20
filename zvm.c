@@ -1432,13 +1432,16 @@ void zvm_end_program(uint32_t main_module_id)
 	const int n_substances = zvm_arrlen(ZVM_PRG->substances);
 	printf("n_substances:               %d\n", n_substances);
 	for (int i = 0; i < n_substances; i++) {
-		struct zvm_substance_key* key = &ZVM_PRG->substances[i].key;
-		printf("   F[%d] :: module_id=%d", i , key->module_id);
+		struct zvm_substance* sb = &ZVM_PRG->substances[i];
+		struct zvm_substance_key* key = &sb->key;
+		printf("   SB[%d] :: module_id=%d", i , key->module_id);
 
 		const int outcome_request_sz = get_module_outcome_request_sz(&ZVM_PRG->modules[key->module_id]);
 
 		printf(" rq=");
 		bs32_print(outcome_request_sz, bufp(key->outcome_request_bs32_p));
+
+		printf(" seqlen=%d", sb->sequence_len);
 
 		printf("\n");
 	}
