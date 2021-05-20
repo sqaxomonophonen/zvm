@@ -1500,6 +1500,10 @@ void zvm_end_program(uint32_t main_module_id)
 
 	transmogrify_main_substance(ZVM_PRG->main_substance_id);
 
+	// have a look at
+	// https://compileroptimizations.com/
+	// to find inspiration, maybe
+
 	#ifdef VERBOSE_DEBUG
 	printf("=======================================\n");
 	const int n_substances = zvm_arrlen(ZVM_PRG->substances);

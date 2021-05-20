@@ -103,6 +103,10 @@ struct zvm_substance {
 	int refcount;
 };
 
+struct zvm_function {
+	uint32_t substance_id;
+};
+
 struct zvm_program {
 	struct zvm_module* modules;
 	uint32_t main_module_id;
@@ -110,6 +114,7 @@ struct zvm_program {
 	uint32_t* buf;
 	struct zvm_substance_keyval* substance_keyvals;
 	struct zvm_substance* substances;
+	struct zvm_function* functions;
 };
 
 struct zvm {
