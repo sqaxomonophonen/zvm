@@ -1416,8 +1416,8 @@ static void analyze_substance_rec(int substance_id)
 
 	sb->refcount++;
 
-	if (sb->analyzed) return;
-	sb->analyzed = 1;
+	if (sb->tag) return;
+	sb->tag = 1;
 
 	int sequence_len = sb->sequence_len;
 	for (int i = 0; i < sequence_len; i++) {
@@ -1450,18 +1450,22 @@ static void analyze_substance_rec(int substance_id)
 	//    sense of, but that's like "-O0 -g")
 }
 
-static void analyze_main_substance(int main_substance_id)
+static void clear_substance_tags()
 {
 	const int n_substances = zvm_arrlen(ZVM_PRG->substances);
-
 	for (int i = 0; i < n_substances; i++) {
 		struct zvm_substance* sb = &ZVM_PRG->substances[i];
-		sb->analyzed = 0;
+		sb->tag = 0;
 	}
+}
 
+static void analyze_main_substance(int main_substance_id)
+{
+	clear_substance_tags();
 	analyze_substance_rec(main_substance_id);
 
 	#ifdef VERBOSE_DEBUG
+	const int n_substances = zvm_arrlen(ZVM_PRG->substances);
 	for (int i = 0; i < n_substances; i++) {
 		struct zvm_substance* sb = &ZVM_PRG->substances[i];
 		const int has_state = outcome_request_state_test(sb->key.outcome_request_bs32_p);
@@ -1473,10 +1477,14 @@ static void analyze_main_substance(int main_substance_id)
 
 static void transmogrify_substance_rec(int substance_id)
 {
+	struct zvm_substance* sb = &ZVM_PRG->substances[substance_id];
+	if (sb->tag) return;
+	sb->tag = 1;
 }
 
 static void transmogrify_main_substance(int main_substance_id)
 {
+	clear_substance_tags();
 	transmogrify_substance_rec(main_substance_id);
 }
 
