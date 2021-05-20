@@ -99,7 +99,7 @@ struct zvm_substance {
 	struct zvm_substance_key key;
 	uint32_t sequence_len;
 	uint32_t sequence_p;
-	int transmogrified;
+	int analyzed;
 	int refcount;
 };
 

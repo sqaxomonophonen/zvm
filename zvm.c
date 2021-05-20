@@ -1410,14 +1410,14 @@ static void process_substance(uint32_t substance_id)
 	}
 }
 
-static void transmogrify_substance_rec(int substance_id)
+static void analyze_substance_rec(int substance_id)
 {
 	struct zvm_substance* sb = &ZVM_PRG->substances[substance_id];
 
 	sb->refcount++;
 
-	if (sb->transmogrified) return;
-	sb->transmogrified = 1;
+	if (sb->analyzed) return;
+	sb->analyzed = 1;
 
 	int sequence_len = sb->sequence_len;
 	for (int i = 0; i < sequence_len; i++) {
@@ -1427,20 +1427,39 @@ static void transmogrify_substance_rec(int substance_id)
 		if (substance_id == ZVM_NIL_ID) {
 			continue;
 		}
-		transmogrify_substance_rec(substance_id);
+		analyze_substance_rec(substance_id);
 	}
+
+	// TODO can I do some local analysis here...?
+	//
+	//  - truth table optimization... it's probably not even worth storing
+	//    the information because it's something like, "do truth table
+	//    optimization if !has_state && n_inputs < 8", or, instead of
+	//    basing it on number of inputs, base it on the size of the truth
+	//    table... e.g. I can store the truth table for a 4-to-16 decoder
+	//    in 256 bits (16 possible inputs; 16 output bits each; 16*16=256).
+	//    actually... state doesn't prevent truth table optimization as
+	//    long as state bits are counted as inputs? maybe?
+	//
+	//  - inline-ability? local analysis can reveal the complexity, and
+	//    seems somewhat related to truth-table optimization stuff?
+	//    however, inline-ability may also be based on top-down analysis
+	//    (e.g. if a substance is seen only once, then there's not really
+	//    any reason not to inline it, except, maybe, for the important
+	//    purpose of emitting bytecode than can be disassembled and made
+	//    sense of, but that's like "-O0 -g")
 }
 
-static void transmogrify_substance(int root_substance_id)
+static void analyze_substance(int root_substance_id)
 {
-	transmogrify_substance_rec(root_substance_id);
+	analyze_substance_rec(root_substance_id);
 
 	#ifdef VERBOSE_DEBUG
 	const int n_substances = zvm_arrlen(ZVM_PRG->substances);
 	for (int i = 0; i < n_substances; i++) {
 		struct zvm_substance* sb = &ZVM_PRG->substances[i];
 		const int has_state = outcome_request_state_test(sb->key.outcome_request_bs32_p);
-		printf("transmogrif; substance=%d; module=%d; state=%d; refcount=%d\n", i, sb->key.module_id, has_state, sb->refcount);
+		printf("analyze; substance=%d; module=%d; state=%d; refcount=%d\n", i, sb->key.module_id, has_state, sb->refcount);
 	}
 	printf("\n");
 	#endif
@@ -1468,7 +1487,7 @@ void zvm_end_program(uint32_t main_module_id)
 
 	int buf_sz_after_process_substance = buftop();
 
-	transmogrify_substance(ZVM_PRG->main_substance_id);
+	analyze_substance(ZVM_PRG->main_substance_id);
 
 	#ifdef VERBOSE_DEBUG
 	printf("=======================================\n");
