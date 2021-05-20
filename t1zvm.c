@@ -185,7 +185,5 @@ int main(int argc, char** argv)
 
 	zvm_end_program(module_id_ram64k);
 
-	
-
 	return EXIT_SUCCESS;
 }
