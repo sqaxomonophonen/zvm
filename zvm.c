@@ -1517,11 +1517,11 @@ static void analyze_substance_rec(int substance_id)
 
 	const int steps_len = sb->steps_len;
 	for (int i = 0; i < steps_len; i++) {
-		struct step* step = &g.steps[i];
+		struct step* step = &g.steps[sb->steps_i + i];
 		if (step->substance_id == ZVM_NIL_ID) {
 			continue;
 		}
-		analyze_substance_rec(substance_id);
+		analyze_substance_rec(step->substance_id);
 	}
 
 	// TODO can I do some local analysis here...?
@@ -1548,8 +1548,7 @@ static void clear_substance_tags()
 {
 	const int n_substances = zvm_arrlen(g.substances);
 	for (int i = 0; i < n_substances; i++) {
-		struct substance* sb = &g.substances[i];
-		sb->tag = 0;
+		g.substances[i].tag = 0;
 	}
 }
 
