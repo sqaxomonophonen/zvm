@@ -302,6 +302,18 @@ static uint32_t* bs32p(int index)
 	return &g.bs32s[index];
 }
 
+uint32_t bs32s_saved_len;
+static void bs32s_save_len()
+{
+	bs32s_saved_len = zvm_arrlen(g.bs32s);
+}
+
+static void bs32s_restore_len()
+{
+	zvm_arrsetlen(g.bs32s, bs32s_saved_len);
+}
+
+
 static uint32_t* get_input_bs32(struct module* mod, int index)
 {
 	return bs32p(mod->input_bs32i + index * mod_n_input_bs32_words(mod));
@@ -836,6 +848,7 @@ static struct drout* drout_find(struct drout* drouts, int n, uint32_t kp, uint32
 static void add_drain_instance_output_visitor(struct tracer* tr, uint32_t p, int output_index)
 {
 	uint32_t code = *bufp(p);
+	zvm_assert((code & ZVM_OP_MASK) == ZVM_OP(INSTANCE));
 	int module_id = code >> ZVM_OP_BITS;
 	zvm_assert(is_valid_module_id(module_id));
 	struct module* mod2 = &g.modules[module_id];
@@ -959,9 +972,10 @@ static void push_step(uint32_t p0, uint32_t ack_substance_id)
 
 static int ack_substance(uint32_t p, uint32_t queue_i, int n, int* queue_np, int lookup_only)
 {
-	uint32_t buftop0 = buftop();
+	bs32s_save_len();
 
 	uint32_t code = *bufp(p);
+
 	int instance_module_id = code >> ZVM_OP_BITS;
 	zvm_assert(is_valid_module_id(instance_module_id));
 
@@ -1010,7 +1024,7 @@ static int ack_substance(uint32_t p, uint32_t queue_i, int n, int* queue_np, int
 
 	if (!did_insert) {
 		// no insert; rollback allocations
-		zvm_arrsetlen(zvm__buf, buftop0);
+		bs32s_restore_len();
 	}
 
 	return produced_substance_id;
