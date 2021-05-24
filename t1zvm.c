@@ -19,7 +19,7 @@ uint32_t module_id_ram64k;
 static uint32_t emit_and()
 {
 	zvm_begin_module(2, 1);
-	zvm_assign_output(0, zvm_op_nor(zvm_op_nor(ZVM_INPUT(0), ZVM_INPUT(0)), zvm_op_nor(ZVM_INPUT(1), ZVM_INPUT(1))));
+	zvm_op_output(0, zvm_op_nor(zvm_op_nor(ZVM_INPUT(0), ZVM_INPUT(0)), zvm_op_nor(ZVM_INPUT(1), ZVM_INPUT(1))));
 	return zvm_end_module();
 }
 
@@ -27,14 +27,14 @@ static uint32_t emit_or()
 {
 	zvm_begin_module(2, 1);
 	uint32_t x = zvm_op_nor(ZVM_INPUT(0), ZVM_INPUT(1));
-	zvm_assign_output(0, zvm_op_nor(x, x));
+	zvm_op_output(0, zvm_op_nor(x, x));
 	return zvm_end_module();
 }
 
 static uint32_t emit_not()
 {
 	zvm_begin_module(1, 1);
-	zvm_assign_output(0, zvm_op_nor(ZVM_INPUT(0), ZVM_INPUT(0)));
+	zvm_op_output(0, zvm_op_nor(ZVM_INPUT(0), ZVM_INPUT(0)));
 	return zvm_end_module();
 }
 
@@ -80,7 +80,7 @@ static uint32_t emit_decoder(int n_in)
 			uint32_t y = i&m ? in : op_not(in);
 			x = (j == 0) ? (y) : (op_and(x, y));
 		}
-		zvm_assign_output(i, x);
+		zvm_op_output(i, x);
 	}
 	return zvm_end_module();
 }
@@ -91,7 +91,7 @@ static uint32_t emit_memory_bit()
 	const uint32_t WE = ZVM_INPUT(0);
 	const uint32_t IN = ZVM_INPUT(1);
 	uint32_t dly = zvm_op_unit_delay(ZVM_PLACEHOLDER);
-	zvm_assign_output(0, dly);
+	zvm_op_output(0, dly);
 	zvm_assign_arg(dly, 0, op_or(op_and(op_not(WE), dly), op_and(WE, IN)));
 	return zvm_end_module();
 }
@@ -106,7 +106,7 @@ static uint32_t emit_memory_byte()
 		uint32_t bit = zvm_op_instance(module_id_memory_bit);
 		zvm_arg(WE);
 		zvm_arg(in);
-		zvm_assign_output(i, op_and(RE, bit));
+		zvm_op_output(i, op_and(RE, bit));
 	}
 
 	return zvm_end_module();
@@ -144,7 +144,7 @@ static uint32_t emit_ram16(int address_bus_size, uint32_t ram_module_id)
 			uint32_t o = zvm_op_unpack(i, memarr[j]);
 			x = (j == 0) ? (o) : (op_or(x, o));
 		}
-		zvm_assign_output(i, x);
+		zvm_op_output(i, x);
 	}
 
 	return zvm_end_module();
