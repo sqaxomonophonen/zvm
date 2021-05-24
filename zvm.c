@@ -76,12 +76,13 @@ struct globals {
 	struct substance_keyval* substance_keyvals;
 	struct substance* substances;
 	struct output* outputs;
-	struct drout* drains;
-	struct drout* outcomes;
-	uint32_t* decr_lists;
-	uint32_t* bs32s;
-	uint32_t* queue;
 	struct step* steps;
+	uint32_t* bs32s;
+
+	struct drout* tmp_drains;
+	struct drout* tmp_outcomes;
+	uint32_t* tmp_decr_lists;
+	uint32_t* tmp_queue;
 
 	uint32_t main_module_id;
 	uint32_t main_substance_id;
@@ -811,12 +812,12 @@ static void setup_drout(struct drout* drout, uint32_t p, uint32_t index)
 
 static void push_drain(uint32_t p, uint32_t index)
 {
-	setup_drout(zvm_arradd(g.drains, 1), p, index);
+	setup_drout(zvm_arradd(g.tmp_drains, 1), p, index);
 }
 
 static void push_outcome(uint32_t p, uint32_t index)
 {
-	setup_drout(zvm_arradd(g.outcomes, 1), p, index);
+	setup_drout(zvm_arradd(g.tmp_outcomes, 1), p, index);
 }
 
 static int drout_find_index(struct drout* drouts, int n, uint32_t kp, uint32_t kidx)
@@ -884,14 +885,14 @@ static void drain_to_output_instance_output_visitor_count(struct tracer* tr, uin
 {
 	struct drout* drain = tr->usr;
 	drain->counter++;
-	struct drout* outcome = drout_find(g.outcomes, zvm_arrlen(g.outcomes), p, output_index);
+	struct drout* outcome = drout_find(g.tmp_outcomes, zvm_arrlen(g.tmp_outcomes), p, output_index);
 	outcome->decr_list_n++;
 }
 
 static void drain_to_output_instance_output_visitor_write(struct tracer* tr, uint32_t p, int output_index)
 {
-	struct drout* outcome = drout_find(g.outcomes, zvm_arrlen(g.outcomes), p, output_index);
-	g.decr_lists[outcome->decr_list_i + outcome->decr_list_n++] = *(uint32_t*)tr->usr;
+	struct drout* outcome = drout_find(g.tmp_outcomes, zvm_arrlen(g.tmp_outcomes), p, output_index);
+	g.tmp_decr_lists[outcome->decr_list_i + outcome->decr_list_n++] = *(uint32_t*)tr->usr;
 }
 
 #define ENCODE_DRAIN(v)    ((v)&0x7fffffff)
@@ -954,7 +955,7 @@ static int queue_outcome_get_pspan_length(uint32_t* queue, int n, int break_on_d
 		} else {
 			zvm_assert(is_outcome);
 		}
-		struct drout* outcome = &g.outcomes[GET_VALUE(qv)];
+		struct drout* outcome = &g.tmp_outcomes[GET_VALUE(qv)];
 		if (p0 == ZVM_NIL_P) {
 			p0 = outcome->p;
 		} else if (outcome->p != p0) {
@@ -987,13 +988,13 @@ static int ack_substance(uint32_t p, uint32_t queue_i, int n, int* queue_np, int
 		.outcome_request_bs32i = bs32_alloc(outcome_request_sz),
 	};
 
-	uint32_t* queue = &g.queue[queue_i];
+	uint32_t* queue = &g.tmp_queue[queue_i];
 	for (int i = 0; i < n; i++) {
 		// populate outcome_request_bs32_p ...
 		uint32_t qv = queue[i];
 		zvm_assert(IS_OUTCOME(qv));
 		uint32_t outcome_index = GET_VALUE(qv);
-		struct drout* outcome = &g.outcomes[outcome_index];
+		struct drout* outcome = &g.tmp_outcomes[outcome_index];
 		zvm_assert(outcome->p == p);
 		if (outcome->index == ZVM_NIL_ID) {
 			outcome_request_state_set(key.outcome_request_bs32i);
@@ -1006,12 +1007,12 @@ static int ack_substance(uint32_t p, uint32_t queue_i, int n, int* queue_np, int
 			uint32_t decr_list_n = outcome->decr_list_n;
 			uint32_t decr_list_i = outcome->decr_list_i;
 			for (int i = 0; i < decr_list_n; i++) {
-				uint32_t drain_index = g.decr_lists[decr_list_i + i];
-				struct drout* drain = &g.drains[drain_index];
+				uint32_t drain_index = g.tmp_decr_lists[decr_list_i + i];
+				struct drout* drain = &g.tmp_drains[drain_index];
 				zvm_assert(drain->counter > 0 && "decrement when zero not expected");
 				drain->counter--;
 				if (drain->counter == 0) {
-					g.queue[(*queue_np)++] = ENCODE_DRAIN(drain_index);
+					g.tmp_queue[(*queue_np)++] = ENCODE_DRAIN(drain_index);
 				}
 			}
 		}
@@ -1037,8 +1038,8 @@ static void process_substance(uint32_t substance_id)
 
 	clear_node_visit_set(mod);
 
-	zvm_arrsetlen(g.drains, 0);
-	zvm_arrsetlen(g.outcomes, 0);
+	zvm_arrsetlen(g.tmp_drains, 0);
+	zvm_arrsetlen(g.tmp_outcomes, 0);
 
 	// find drains ...
 	{
@@ -1078,11 +1079,11 @@ static void process_substance(uint32_t substance_id)
 
 		// sort and compact drain array by removing duplicates
 
-		const int n_drains_with_dupes = zvm_arrlen(g.drains);
+		const int n_drains_with_dupes = zvm_arrlen(g.tmp_drains);
 		qsort(
-			g.drains,
+			g.tmp_drains,
 			n_drains_with_dupes,
-			sizeof(*g.drains),
+			sizeof(*g.tmp_drains),
 			drout_compar);
 
 		uint32_t read_i = 0;
@@ -1092,19 +1093,19 @@ static void process_substance(uint32_t substance_id)
 		while (read_i < i_end) {
 
 			if (read_i != write_i) {
-				memcpy(&g.drains[write_i], &g.drains[read_i], sizeof(*g.drains));
+				memcpy(&g.tmp_drains[write_i], &g.tmp_drains[read_i], sizeof(*g.tmp_drains));
 			}
 
 			uint32_t i0 = read_i;
 			do {
 				read_i++;
-			} while (read_i < i_end && drout_compar(&g.drains[i0], &g.drains[read_i]) == 0);
+			} while (read_i < i_end && drout_compar(&g.tmp_drains[i0], &g.tmp_drains[read_i]) == 0);
 
 			write_i++;
 		}
 		zvm_assert(read_i == i_end);
 
-		zvm_arrsetlen(g.drains, write_i);
+		zvm_arrsetlen(g.tmp_drains, write_i);
 	}
 
 	// find outcomes ...
@@ -1150,17 +1151,17 @@ static void process_substance(uint32_t substance_id)
 			// NOTE: assumption here that drouts only require
 			// sorting when request_state is true
 			qsort(
-				g.outcomes,
-				zvm_arrlen(g.outcomes),
-				sizeof(*g.outcomes),
+				g.tmp_outcomes,
+				zvm_arrlen(g.tmp_outcomes),
+				sizeof(*g.tmp_outcomes),
 				drout_compar);
 		}
 	}
 
 	// initialize counters and decrement lists
 
-	const int n_drains = zvm_arrlen(g.drains);
-	const int n_outcomes = zvm_arrlen(g.outcomes);
+	const int n_drains = zvm_arrlen(g.tmp_drains);
+	const int n_outcomes = zvm_arrlen(g.tmp_outcomes);
 
 	for (int pass = 0; pass < 2; pass++) {
 		if (pass == 1) {
@@ -1168,16 +1169,16 @@ static void process_substance(uint32_t substance_id)
 			// decrement list and are thus reinitialized
 
 			for (int i = 0; i < n_drains; i++) {
-				g.drains[i].decr_list_n = 0;
+				g.tmp_drains[i].decr_list_n = 0;
 			}
 
 			for (int i = 0; i < n_outcomes; i++) {
-				g.outcomes[i].decr_list_n = 0;
+				g.tmp_outcomes[i].decr_list_n = 0;
 			}
 		}
 
 		for (int i = 0; i < n_drains; i++) {
-			struct drout* drain = &g.drains[i];
+			struct drout* drain = &g.tmp_drains[i];
 
 			struct tracer tr = {
 				.mod = mod,
@@ -1199,7 +1200,7 @@ static void process_substance(uint32_t substance_id)
 		}
 
 		for (int i = 0; i < n_outcomes; i++) {
-			struct drout* outcome = &g.outcomes[i];
+			struct drout* outcome = &g.tmp_outcomes[i];
 			uint32_t code = *bufp(outcome->p);
 			int op = code & ZVM_OP_MASK;
 			zvm_assert(op == ZVM_OP(INSTANCE));
@@ -1213,13 +1214,13 @@ static void process_substance(uint32_t substance_id)
 					continue;
 				}
 
-				struct drout* drain = drout_find(g.drains, zvm_arrlen(g.drains), outcome->p, j);
+				struct drout* drain = drout_find(g.tmp_drains, zvm_arrlen(g.tmp_drains), outcome->p, j);
 
 				if (pass == 0) {
 					outcome->counter++;
 					drain->decr_list_n++;
 				} else if (pass == 1) {
-					g.decr_lists[drain->decr_list_i + (drain->decr_list_n++)] = i;
+					g.tmp_decr_lists[drain->decr_list_i + (drain->decr_list_n++)] = i;
 				} else {
 					zvm_assert(!"unreachable");
 				}
@@ -1231,18 +1232,18 @@ static void process_substance(uint32_t substance_id)
 
 			uint32_t top = 0;
 			for (int i = 0; i < n_drains; i++) {
-				struct drout* drain = &g.drains[i];
+				struct drout* drain = &g.tmp_drains[i];
 				drain->decr_list_i = top;
 				top += drain->decr_list_n;
 			}
 
 			for (int i = 0; i < n_outcomes; i++) {
-				struct drout* outcome = &g.outcomes[i];
+				struct drout* outcome = &g.tmp_outcomes[i];
 				outcome->decr_list_i = top;
 				top += outcome->decr_list_n;
 			}
 
-			zvm_arrsetlen(g.decr_lists, top);
+			zvm_arrsetlen(g.tmp_decr_lists, top);
 		}
 	}
 
@@ -1250,15 +1251,15 @@ static void process_substance(uint32_t substance_id)
 
 	// initialize drain/outcome queue
 	const int queue_sz = n_drains+n_outcomes;
-	(void)zvm_arrsetlen(g.queue, queue_sz);
+	(void)zvm_arrsetlen(g.tmp_queue, queue_sz);
 
 	int queue_i = 0;
 	int queue_n = 0;
 
 	for (int i = 0; i < n_drains; i++) {
-		struct drout* drain = &g.drains[i];
+		struct drout* drain = &g.tmp_drains[i];
 		if (drain->counter == 0) {
-			g.queue[queue_n++] = ENCODE_DRAIN(i);
+			g.tmp_queue[queue_n++] = ENCODE_DRAIN(i);
 		}
 
 	}
@@ -1266,9 +1267,9 @@ static void process_substance(uint32_t substance_id)
 	clear_node_visit_set(mod);
 
 	for (int i = 0; i < n_outcomes; i++) {
-		struct drout* outcome = &g.outcomes[i];
+		struct drout* outcome = &g.tmp_outcomes[i];
 		if (outcome->counter == 0) {
-			g.queue[queue_n++] = ENCODE_OUTCOME(i);
+			g.tmp_queue[queue_n++] = ENCODE_OUTCOME(i);
 		}
 
 		uint32_t index = outcome->index;
@@ -1286,7 +1287,7 @@ static void process_substance(uint32_t substance_id)
 		int has_outcomes = 0;
 
 		for (int i = queue_i; i < queue_n; i++) {
-			uint32_t qv = g.queue[i];
+			uint32_t qv = g.tmp_queue[i];
 			if (IS_DRAIN(qv)) {
 				has_drains = 1;
 				break;
@@ -1299,25 +1300,25 @@ static void process_substance(uint32_t substance_id)
 		if (has_drains) {
 			// execute drains as long as they're available
 
-			qsort(&g.queue[queue_i], queue_n-queue_i, sizeof(*g.queue), queue_drain_outcome_compar);
+			qsort(&g.tmp_queue[queue_i], queue_n-queue_i, sizeof(*g.tmp_queue), queue_drain_outcome_compar);
 
 			for (; queue_i < queue_n; queue_i++) {
-				uint32_t qv = g.queue[queue_i];
+				uint32_t qv = g.tmp_queue[queue_i];
 
 				if (IS_OUTCOME(qv)) break;
 
 				const int drain_index = GET_VALUE(qv);
-				struct drout* drain = &g.drains[drain_index];
+				struct drout* drain = &g.tmp_drains[drain_index];
 
 				int n = drain->decr_list_n;
-				uint32_t* decr_list = &g.decr_lists[drain->decr_list_i];
+				uint32_t* decr_list = &g.tmp_decr_lists[drain->decr_list_i];
 				for (int i = 0; i < n; i++) {
 					const int outcome_index = decr_list[i];
-					struct drout* outcome = &g.outcomes[outcome_index];
+					struct drout* outcome = &g.tmp_outcomes[outcome_index];
 					zvm_assert(outcome->counter > 0);
 					outcome->counter--;
 					if (outcome->counter == 0) {
-						g.queue[queue_n++] = ENCODE_OUTCOME(outcome_index);
+						g.tmp_queue[queue_n++] = ENCODE_OUTCOME(outcome_index);
 					}
 				}
 			}
@@ -1329,8 +1330,8 @@ static void process_substance(uint32_t substance_id)
 		// now there are only outcomes in the [queue_i;queue_n]
 		// interval.
 
-		compar_drouts = g.outcomes;
-		qsort(&g.queue[queue_i], queue_n-queue_i, sizeof(*g.queue), queue_outcome_pi_compar);
+		compar_drouts = g.tmp_outcomes;
+		qsort(&g.tmp_queue[queue_i], queue_n-queue_i, sizeof(*g.tmp_queue), queue_outcome_pi_compar);
 
 		#if 0
 		for (int i = queue_i; i < queue_n; i++) zvm_assert(IS_OUTCOME(queue[i]));
@@ -1339,9 +1340,9 @@ static void process_substance(uint32_t substance_id)
 		// look for full calls ...
 		int n_full_calls = 0;
 		for (int i = queue_i; i < queue_n; ) {
-			int pspan_length = queue_outcome_get_pspan_length(&g.queue[i], queue_n-i, 0);
+			int pspan_length = queue_outcome_get_pspan_length(&g.tmp_queue[i], queue_n-i, 0);
 
-			uint32_t p0 = g.outcomes[GET_VALUE(g.queue[i])].p;
+			uint32_t p0 = g.tmp_outcomes[GET_VALUE(g.tmp_queue[i])].p;
 
 			uint32_t code = *bufp(p0);
 			int op = code & ZVM_OP_MASK;
@@ -1377,7 +1378,7 @@ static void process_substance(uint32_t substance_id)
 					zvm_assert(!"unreachable");
 				}
 
-				struct drout* outcome = &g.outcomes[GET_VALUE(g.queue[i + (ii++)])];
+				struct drout* outcome = &g.tmp_outcomes[GET_VALUE(g.tmp_queue[i + (ii++)])];
 				zvm_assert(outcome->p == p0);
 				if (outcome->index != expected_drout_index) {
 					is_full_call = 0;
@@ -1393,7 +1394,7 @@ static void process_substance(uint32_t substance_id)
 			if (is_full_call) n_full_calls++;
 
 			for (int j = 0; j < pspan_length; j++) {
-				struct drout* outcome = &g.outcomes[GET_VALUE(g.queue[i+j])];
+				struct drout* outcome = &g.tmp_outcomes[GET_VALUE(g.tmp_queue[i+j])];
 				outcome->usr = is_full_call;
 			}
 
@@ -1403,15 +1404,15 @@ static void process_substance(uint32_t substance_id)
 		if (n_full_calls > 0) {
 			{
 				// place full calls in beginning of queue
-				compar_drouts = g.outcomes;
-				qsort(&g.queue[queue_i], queue_n-queue_i, sizeof(*g.queue), queue_outcome_full_compar);
+				compar_drouts = g.tmp_outcomes;
+				qsort(&g.tmp_queue[queue_i], queue_n-queue_i, sizeof(*g.tmp_queue), queue_outcome_full_compar);
 			}
 
 			int queue_n0 = queue_n;
 			while (n_full_calls > 0 && queue_i < queue_n0) {
-				int pspan_length = queue_outcome_get_pspan_length(&g.queue[queue_i], queue_n0-queue_i, 0);
+				int pspan_length = queue_outcome_get_pspan_length(&g.tmp_queue[queue_i], queue_n0-queue_i, 0);
 
-				uint32_t p0 = g.outcomes[GET_VALUE(g.queue[queue_i])].p;
+				uint32_t p0 = g.tmp_outcomes[GET_VALUE(g.tmp_queue[queue_i])].p;
 
 				ack_substance(
 					p0,
@@ -1438,8 +1439,8 @@ static void process_substance(uint32_t substance_id)
 			// to pick the first partial call and continue
 			// :)
 
-			int pspan_length = queue_outcome_get_pspan_length(&g.queue[queue_i], queue_n-queue_i, 0);
-			uint32_t p0 = g.outcomes[GET_VALUE(g.queue[queue_i])].p;
+			int pspan_length = queue_outcome_get_pspan_length(&g.tmp_queue[queue_i], queue_n-queue_i, 0);
+			uint32_t p0 = g.tmp_outcomes[GET_VALUE(g.tmp_queue[queue_i])].p;
 
 			ack_substance(
 				p0,
@@ -1463,10 +1464,10 @@ static void process_substance(uint32_t substance_id)
 	sb->steps_i = zvm_arrlen(g.steps);
 	queue_i = 0;
 	while (queue_i < queue_n) {
-		uint32_t qv = g.queue[queue_i];
+		uint32_t qv = g.tmp_queue[queue_i];
 		if (IS_DRAIN(qv)) {
 			uint32_t v = GET_VALUE(qv);
-			struct drout* drain = &g.drains[v];
+			struct drout* drain = &g.tmp_drains[v];
 			uint32_t p = drain->p;
 			if (p != ZVM_NIL_P) {
 				zvm_assert(!ZVM_IS_SPECIAL(p));
@@ -1480,10 +1481,10 @@ static void process_substance(uint32_t substance_id)
 			continue;
 		}
 
-		int pspan_length = queue_outcome_get_pspan_length(&g.queue[queue_i], queue_n-queue_i, 1);
+		int pspan_length = queue_outcome_get_pspan_length(&g.tmp_queue[queue_i], queue_n-queue_i, 1);
 		zvm_assert(pspan_length > 0);
 
-		uint32_t p0 = g.outcomes[GET_VALUE(g.queue[queue_i])].p;
+		uint32_t p0 = g.tmp_outcomes[GET_VALUE(g.tmp_queue[queue_i])].p;
 
 		uint32_t ack_substance_id = ack_substance(
 			p0,
