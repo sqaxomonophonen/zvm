@@ -117,13 +117,6 @@ static inline int u32cmp(const uint32_t a, const uint32_t b)
 	return (a>b)-(b>a);
 }
 
-static inline int u32paircmp(const uint32_t* a, const uint32_t* b)
-{
-	int c0 = u32cmp(a[0], b[0]);
-	if (c0 != 0) return c0;
-	return u32cmp(a[1], b[1]);
-}
-
 static uint32_t buftop()
 {
 	return zvm_arrlen(zvm__buf);
