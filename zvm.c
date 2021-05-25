@@ -286,11 +286,6 @@ static uint32_t bs32_alloc_2d(int n, int bc)
 	return bs - g.bs32s;
 }
 
-static inline int mod_n_input_bs32_words(struct module* mod)
-{
-	return bs32_n_words(mod->n_inputs);
-}
-
 static uint32_t* bs32p(int index)
 {
 	return &g.bs32s[index];
@@ -307,10 +302,14 @@ static void bs32s_restore_len()
 	zvm_arrsetlen(g.bs32s, bs32s_saved_len);
 }
 
+static inline int n_input_bs32_words(struct module* mod)
+{
+	return bs32_n_words(mod->n_inputs);
+}
 
 static uint32_t* get_input_bs32(struct module* mod, int index)
 {
-	return bs32p(mod->input_bs32i + index * mod_n_input_bs32_words(mod));
+	return bs32p(mod->input_bs32i + index * n_input_bs32_words(mod));
 }
 
 static uint32_t* get_state_input_dep_bs32(struct module* mod)
