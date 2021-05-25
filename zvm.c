@@ -449,11 +449,6 @@ struct tracer {
 	void* usr;
 };
 
-static inline struct substance* tracer_substance(struct tracer* tr)
-{
-	return &g.substances[tr->substance_id];
-}
-
 static void trace(struct tracer* tr, uint32_t p)
 {
 	int unpack_index = -1;
