@@ -97,7 +97,6 @@ static inline int is_valid_module_id(int module_id)
 
 #define ZVM_MOD (&g.modules[zvm_arrlen(g.modules)-1])
 
-
 // stolen from nothings/stb/stretchy_buffer.h
 void* zvm__grow_impl(void* xs, int increment, int item_sz)
 {
@@ -139,6 +138,21 @@ static inline int get_module_outcome_request_sz(struct module* mod)
 static inline int module_has_state(struct module* mod)
 {
 	return mod->n_bits > 0;
+}
+
+static struct module* get_instance_mod_for_code(uint32_t code)
+{
+	const int op = code & ZVM_OP_MASK;
+	zvm_assert(op == ZVM_OP(INSTANCE) && "expected op to be an instance");
+	const int instance_module_id = code >> ZVM_OP_BITS;
+	zvm_assert(is_valid_module_id(instance_module_id));
+	return &g.modules[instance_module_id];
+}
+
+
+static struct module* get_instance_mod_at_p(uint32_t p)
+{
+	return get_instance_mod_for_code(*bufp(p));
 }
 
 void zvm_init()
@@ -338,12 +352,7 @@ static inline int get_op_n_args(uint32_t code)
 {
 	int op = code & ZVM_OP_MASK;
 	if (op == ZVM_OP(INSTANCE)) {
-		int module_id = (code >> ZVM_OP_BITS);
-		#if DEBUG
-		zvm_assert(is_valid_module_id(module_id));
-		#endif
-		struct module* mod = &g.modules[module_id];
-		return mod->n_inputs;
+		return get_instance_mod_for_code(code)->n_inputs;
 	}
 	switch (op) {
 	#define ZOP(op,narg) case ZVM_OP(op): zvm_assert(narg >= 0); return narg;
@@ -370,10 +379,7 @@ static int get_op_n_outputs(uint32_t p)
 	uint32_t code = *bufp(p);
 	int op = code & ZVM_OP_MASK;
 	if (op == ZVM_OP(INSTANCE)) {
-		int module_id = code >> ZVM_OP_BITS;
-		zvm_assert(is_valid_module_id(module_id));
-		struct module* mod = &g.modules[module_id];
-		return mod->n_outputs;
+		return get_instance_mod_for_code(code)->n_outputs;
 	}
 
 	return 1;
@@ -480,19 +486,17 @@ static void trace(struct tracer* tr, uint32_t p)
 
 		int op = code & ZVM_OP_MASK;
 		if (op == ZVM_OP(INSTANCE)) {
-			int module_id = code >> ZVM_OP_BITS;
-			zvm_assert(is_valid_module_id(module_id));
-			struct module* mod2 = &g.modules[module_id];
-			if (mod2->n_outputs == 1 && unpack_index == -1) unpack_index = 0;
-			zvm_assert(0 <= unpack_index && unpack_index < mod2->n_outputs && "expected valid unpack");
+			struct module* instance_mod = get_instance_mod_for_code(code);
+			if (instance_mod->n_outputs == 1 && unpack_index == -1) unpack_index = 0;
+			zvm_assert(0 <= unpack_index && unpack_index < instance_mod->n_outputs && "expected valid unpack");
 
 			if (tr->instance_output_visitor != NULL) {
 				tr->instance_output_visitor(tr, p, unpack_index);
 			}
 
 			if (!tr->break_at_instance) {
-				for (int i = 0; i < mod2->n_inputs; i++) {
-					if (bs32_test(get_output_input_dep_bs32(mod2, unpack_index), i)) {
+				for (int i = 0; i < instance_mod->n_inputs; i++) {
+					if (bs32_test(get_output_input_dep_bs32(instance_mod, unpack_index), i)) {
 						trace(tr, *bufp(zvm__arg_index(p, i)));
 					}
 				}
@@ -554,11 +558,9 @@ static void trace_state_deps(uint32_t* input_bs32, struct module* mod)
 		if (op == ZVM_OP(UNIT_DELAY)) {
 			trace_inputs_rec(mod, input_bs32, *bufp(zvm__arg_index(p,0)));
 		} else if (op == ZVM_OP(INSTANCE)) {
-			int module_id = code >> ZVM_OP_BITS;
-			zvm_assert(is_valid_module_id(module_id));
-			struct module* mod2 = &g.modules[module_id];
-			uint32_t* ibs = get_state_input_dep_bs32(mod2);
-			int n_inputs = mod2->n_inputs;
+			struct module* instance_mod = get_instance_mod_for_code(code);
+			uint32_t* ibs = get_state_input_dep_bs32(instance_mod);
+			int n_inputs = instance_mod->n_inputs;
 			for (int i = 0; i < n_inputs; i++) {
 				if (bs32_test(ibs, i)) {
 					trace_inputs_rec(mod, input_bs32, *bufp(zvm__arg_index(p,i)));
@@ -612,10 +614,8 @@ int zvm_end_module()
 				} else if (op == ZVM_OP(UNIT_DELAY)) {
 					mod->n_bits++; // XXX might not be connected?
 				} else if (op == ZVM_OP(INSTANCE)) {
-					int module_id = code >> ZVM_OP_BITS;
-					zvm_assert(is_valid_module_id(module_id));
-					struct module* mod2 = &g.modules[module_id];
-					mod->n_bits += mod2->n_bits; // XXX might not be connected?
+					struct module* instance_mod = get_instance_mod_for_code(code);
+					mod->n_bits += instance_mod->n_bits; // XXX might not be connected?
 				}
 			}
 
@@ -827,14 +827,9 @@ static struct drout* drout_find(struct drout* drouts, int n, uint32_t kp, uint32
 
 static void add_drain_instance_output_visitor(struct tracer* tr, uint32_t p, int output_index)
 {
-	uint32_t code = *bufp(p);
-	zvm_assert((code & ZVM_OP_MASK) == ZVM_OP(INSTANCE));
-	int module_id = code >> ZVM_OP_BITS;
-	zvm_assert(is_valid_module_id(module_id));
-	struct module* mod2 = &g.modules[module_id];
-
-	for (int i = 0; i < mod2->n_inputs; i++) {
-		if (!bs32_test(get_output_input_dep_bs32(mod2, output_index), i)) {
+	struct module* instance_mod = get_instance_mod_at_p(p);
+	for (int i = 0; i < instance_mod->n_inputs; i++) {
+		if (!bs32_test(get_output_input_dep_bs32(instance_mod, output_index), i)) {
 			continue;
 		}
 		push_drain(p, i);
@@ -1037,12 +1032,10 @@ static void process_substance(uint32_t substance_id)
 				if (op == ZVM_OP(UNIT_DELAY)) {
 					add_drain(substance_id, p, 0);
 				} else if (op == ZVM_OP(INSTANCE)) {
-					int module_id = code >> ZVM_OP_BITS;
-					zvm_assert(is_valid_module_id(module_id));
-					struct module* mod2 = &g.modules[module_id];
-					if (module_has_state(mod2)) {
-						int n_inputs = mod2->n_inputs;
-						uint32_t* ibs = get_state_input_dep_bs32(mod2);
+					struct module* instance_mod = get_instance_mod_for_code(code);
+					if (module_has_state(instance_mod)) {
+						int n_inputs = instance_mod->n_inputs;
+						uint32_t* ibs = get_state_input_dep_bs32(instance_mod);
 						for (int i = 0; i < n_inputs; i++) {
 							if (bs32_test(ibs, i)) {
 								add_drain(substance_id, p, i);
@@ -1115,10 +1108,7 @@ static void process_substance(uint32_t substance_id)
 				uint32_t code = *bufp(p);
 				int op = code & ZVM_OP_MASK;
 				if (op == ZVM_OP(INSTANCE)) {
-					int module_id = code >> ZVM_OP_BITS;
-					zvm_assert(is_valid_module_id(module_id));
-					struct module* instance_mod = &g.modules[module_id];
-					if (module_has_state(instance_mod)) {
+					if (module_has_state(get_instance_mod_for_code(code))) {
 						push_outcome(p, ZVM_NIL_ID);
 					}
 				}
@@ -1179,15 +1169,10 @@ static void process_substance(uint32_t substance_id)
 
 		for (int i = 0; i < n_outcomes; i++) {
 			struct drout* outcome = &g.tmp_outcomes[i];
-			uint32_t code = *bufp(outcome->p);
-			int op = code & ZVM_OP_MASK;
-			zvm_assert(op == ZVM_OP(INSTANCE));
-			int module_id = code >> ZVM_OP_BITS;
-			zvm_assert(is_valid_module_id(module_id));
-			struct module* mod2 = &g.modules[module_id];
+			struct module* instance_mod = get_instance_mod_at_p(outcome->p);
 
-			uint32_t* bs32 = get_outcome_index_input_dep_bs32(mod2, outcome->index);
-			for (int j = 0; j < mod2->n_inputs; j++) {
+			uint32_t* bs32 = get_outcome_index_input_dep_bs32(instance_mod, outcome->index);
+			for (int j = 0; j < instance_mod->n_inputs; j++) {
 				if (!bs32_test(bs32, j)) {
 					continue;
 				}
@@ -1288,10 +1273,9 @@ static void process_substance(uint32_t substance_id)
 					break;
 				}
 
-				const int drain_index = GET_VALUE(qv);
-				struct drout* drain = &g.tmp_drains[drain_index];
-
-				int n = drain->decr_list_n;
+				// release outcomes ...
+				struct drout* drain = &g.tmp_drains[GET_VALUE(qv)];
+				const int n = drain->decr_list_n;
 				uint32_t* decr_list = &g.tmp_decr_lists[drain->decr_list_i];
 				for (int i = 0; i < n; i++) {
 					const int outcome_index = decr_list[i];
@@ -1303,6 +1287,7 @@ static void process_substance(uint32_t substance_id)
 					}
 				}
 			}
+
 			continue;
 		}
 
@@ -1320,16 +1305,11 @@ static void process_substance(uint32_t substance_id)
 		// look for closing substances ...
 		int n_closing_substances = 0;
 		for (int i = queue_i; i < queue_n; ) {
-			int pspan_length = queue_outcome_get_pspan_length(&g.tmp_queue[i], queue_n-i, 0);
+			const int pspan_length = queue_outcome_get_pspan_length(&g.tmp_queue[i], queue_n-i, 0);
 
-			uint32_t p0 = g.tmp_outcomes[GET_VALUE(g.tmp_queue[i])].p;
+			const uint32_t p0 = g.tmp_outcomes[GET_VALUE(g.tmp_queue[i])].p;
 
-			uint32_t code = *bufp(p0);
-			int op = code & ZVM_OP_MASK;
-			zvm_assert(op == ZVM_OP(INSTANCE));
-			int instance_module_id = code >> ZVM_OP_BITS;
-			zvm_assert(is_valid_module_id(instance_module_id));
-			struct module* instance_mod = &g.modules[instance_module_id];
+			struct module* instance_mod = get_instance_mod_at_p(p0);
 
 			const int n_instance_outputs = instance_mod->n_outputs;
 
@@ -1379,6 +1359,8 @@ static void process_substance(uint32_t substance_id)
 
 			if (is_closing_substance) n_closing_substances++;
 
+			// tag outcomes so qsort can place closing
+			// substances in front of queue
 			for (int j = 0; j < pspan_length; j++) {
 				struct drout* outcome = &g.tmp_outcomes[GET_VALUE(g.tmp_queue[i+j])];
 				outcome->usr = is_closing_substance;
@@ -1393,9 +1375,9 @@ static void process_substance(uint32_t substance_id)
 
 			int queue_n0 = queue_n;
 			while (n_closing_substances > 0 && queue_i < queue_n0) {
-				int pspan_length = queue_outcome_get_pspan_length(&g.tmp_queue[queue_i], queue_n0-queue_i, 0);
+				const int pspan_length = queue_outcome_get_pspan_length(&g.tmp_queue[queue_i], queue_n0-queue_i, 0);
 
-				uint32_t p0 = g.tmp_outcomes[GET_VALUE(g.tmp_queue[queue_i])].p;
+				const uint32_t p0 = g.tmp_outcomes[GET_VALUE(g.tmp_queue[queue_i])].p;
 
 				ack_substance(
 					p0,
@@ -1419,11 +1401,16 @@ static void process_substance(uint32_t substance_id)
 			// current attempt at a heuristic solution is to simply
 			// pick the "top of the queue" and continue :-)
 
-			// XXX FIXME; state must NEVER be requested, unless
-			// closing
-
 			int pspan_length = queue_outcome_get_pspan_length(&g.tmp_queue[queue_i], queue_n-queue_i, 0);
 			uint32_t p0 = g.tmp_outcomes[GET_VALUE(g.tmp_queue[queue_i])].p;
+
+
+			struct module* instance_mod = get_instance_mod_at_p(p0);
+
+
+
+			// XXX FIXME; state must NEVER be requested, unless
+			// closing
 
 			ack_substance(
 				p0,
