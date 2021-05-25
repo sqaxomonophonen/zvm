@@ -905,7 +905,7 @@ static int queue_outcome_pi_compar(const void* va, const void* vb)
 	);
 }
 
-static int queue_outcome_full_compar(const void* va, const void* vb)
+static int queue_outcome_closing_compar(const void* va, const void* vb)
 {
 	uint32_t qa = *(uint32_t*)va;
 	uint32_t qb = *(uint32_t*)vb;
@@ -1316,8 +1316,8 @@ static void process_substance(uint32_t substance_id)
 		for (int i = queue_i; i < queue_n; i++) zvm_assert(IS_OUTCOME(queue[i]));
 		#endif
 
-		// look for full calls ...
-		int n_full_calls = 0;
+		// look for closing substances ...
+		int n_closing_substances = 0;
 		for (int i = queue_i; i < queue_n; ) {
 			int pspan_length = queue_outcome_get_pspan_length(&g.tmp_queue[i], queue_n-i, 0);
 
@@ -1334,19 +1334,20 @@ static void process_substance(uint32_t substance_id)
 
 			uint32_t* node_bs32 = get_node_output_bs32(mod);
 
-			int is_full_call = 1;
+			int is_closing_substance = 1;
 			int ii = 0;
 			int requesting_state = module_has_state(instance_mod) && outcome_request_state_test(key.outcome_request_bs32i);
 			int n_checks = n_instance_outputs + (requesting_state ? 1 : 0);
 			if (n_checks > (queue_n-queue_i)) {
 				// if queue size is smaller than the number of
-				// outcomes required for a "full call", then it
-				// cannot possibly be a "full call"
-				is_full_call = 0;
+				// outcomes required for a "closing substance",
+				// then it cannot possibly be a "closing
+				// substance"
+				is_closing_substance = 0;
 			} else for (int j = 0; j < n_checks; j++) {
-				// a call is "full" if the inferred outcome
-				// request is identical to the remaining
-				// outcome request
+				// a substance is "closing" if the inferred
+				// outcome request is identical to the
+				// remaining outcome request
 				const int is_output = (j < n_instance_outputs);
 				const int is_state  = (j == n_instance_outputs);
 
@@ -1366,33 +1367,34 @@ static void process_substance(uint32_t substance_id)
 				struct drout* outcome = &g.tmp_outcomes[GET_VALUE(g.tmp_queue[i + (ii++)])];
 				zvm_assert(outcome->p == p0);
 				if (outcome->index != expected_drout_index) {
-					is_full_call = 0;
+					is_closing_substance = 0;
 					break;
 				}
 			}
 
-			if (is_full_call) {
+			if (is_closing_substance) {
 				zvm_assert(ii == pspan_length);
 			}
 
-			if (is_full_call) n_full_calls++;
+			if (is_closing_substance) n_closing_substances++;
 
 			for (int j = 0; j < pspan_length; j++) {
 				struct drout* outcome = &g.tmp_outcomes[GET_VALUE(g.tmp_queue[i+j])];
-				outcome->usr = is_full_call;
+				outcome->usr = is_closing_substance;
 			}
 
 			i += pspan_length;
 		}
 
-		if (n_full_calls > 0) {
+		if (n_closing_substances > 0) {
 			{
-				// place full calls in beginning of queue
-				qsort(&g.tmp_queue[queue_i], queue_n-queue_i, sizeof(*g.tmp_queue), queue_outcome_full_compar);
+				// place closing substances in beginning of
+				// queue
+				qsort(&g.tmp_queue[queue_i], queue_n-queue_i, sizeof(*g.tmp_queue), queue_outcome_closing_compar);
 			}
 
 			int queue_n0 = queue_n;
-			while (n_full_calls > 0 && queue_i < queue_n0) {
+			while (n_closing_substances > 0 && queue_i < queue_n0) {
 				int pspan_length = queue_outcome_get_pspan_length(&g.tmp_queue[queue_i], queue_n0-queue_i, 0);
 
 				uint32_t p0 = g.tmp_outcomes[GET_VALUE(g.tmp_queue[queue_i])].p;
@@ -1405,32 +1407,22 @@ static void process_substance(uint32_t substance_id)
 					0);
 
 				queue_i += pspan_length;
-				n_full_calls--;
+				n_closing_substances--;
 			}
 
-			zvm_assert((n_full_calls == 0) && "expected to handle all full calls");
+			zvm_assert((n_closing_substances == 0) && "expected to handle all closing substances");
 
 		} else {
-			// no full calls to choose from, so pick a
-			// partial call. it seems complicated to figure
-			// out which partial call is the best pick,
-			// complicated as in O(n!) maybe? however,
-			// reaching this point indicates that instance
-			// splitting is inevitable.
+			// no closing substances to choose from, revealing that
+			// an instance split into 2+ substances is unavoidable.
+			// it seems complicated to pick the best split (as in
+			// O(n!) maybe?)
 
-			// current attempt at a heuristic solution is
-			// to pick the first partial call and continue
-			// :)
+			// current attempt at a heuristic solution is to simply
+			// pick the "top of the queue" and continue :-)
 
-
-			// XXX ... only "full calls" should be allowed to
-			// request state... this is due to the invariant that
-			// all state-reads must come before state-write (for
-			// the same state bit(s))... so... the state outcome is
-			// always last, no?
-
-			zvm_assert(!"NOT IMPLEMENTED");
-
+			// XXX FIXME; state must NEVER be requested, unless
+			// closing
 
 			int pspan_length = queue_outcome_get_pspan_length(&g.tmp_queue[queue_i], queue_n-queue_i, 0);
 			uint32_t p0 = g.tmp_outcomes[GET_VALUE(g.tmp_queue[queue_i])].p;
