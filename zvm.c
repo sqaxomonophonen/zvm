@@ -890,7 +890,6 @@ static int queue_drain_outcome_compar(const void* va, const void* vb)
 }
 
 
-struct drout* compar_drouts;
 static int queue_outcome_pi_compar(const void* va, const void* vb)
 {
 	uint32_t qa = *(uint32_t*)va;
@@ -901,8 +900,8 @@ static int queue_outcome_pi_compar(const void* va, const void* vb)
 	uint32_t b = GET_VALUE(qb);
 
 	return drout_compar(
-		&compar_drouts[a],
-		&compar_drouts[b]
+		&g.tmp_outcomes[a],
+		&g.tmp_outcomes[b]
 	);
 }
 
@@ -914,8 +913,8 @@ static int queue_outcome_full_compar(const void* va, const void* vb)
 	zvm_assert(IS_OUTCOME(qb));
 	uint32_t a = GET_VALUE(qa);
 	uint32_t b = GET_VALUE(qb);
-	struct drout* da = &compar_drouts[a];
-	struct drout* db = &compar_drouts[b];
+	struct drout* da = &g.tmp_outcomes[a];
+	struct drout* db = &g.tmp_outcomes[b];
 	int c0 = db->usr - da->usr;
 	if (c0 != 0) return c0;
 	return drout_compar(da, db);
@@ -1262,29 +1261,31 @@ static void process_substance(uint32_t substance_id)
 	}
 
 	while (queue_i < queue_n) {
-		int has_drains = 0;
-		int has_outcomes = 0;
+		int queue_span_n_drains = 0;
+		int queue_span_n_outcomes = 0;
 
 		for (int i = queue_i; i < queue_n; i++) {
 			uint32_t qv = g.tmp_queue[i];
-			if (IS_DRAIN(qv)) {
-				has_drains = 1;
-				break;
-			}
-			if (IS_OUTCOME(qv)) {
-				has_outcomes = 1;
-			}
+			if (IS_DRAIN(qv)) queue_span_n_drains++;
+			if (IS_OUTCOME(qv)) queue_span_n_outcomes++;
 		}
 
-		if (has_drains) {
+		if (queue_span_n_drains > 0) {
 			// execute drains as long as they're available
 
-			qsort(&g.tmp_queue[queue_i], queue_n-queue_i, sizeof(*g.tmp_queue), queue_drain_outcome_compar);
+			if (queue_span_n_drains > 0) {
+				// move outcomes to end
+				qsort(&g.tmp_queue[queue_i], queue_n-queue_i, sizeof(*g.tmp_queue), queue_drain_outcome_compar);
+			}
 
-			for (; queue_i < queue_n; queue_i++) {
+			int queue_n0 = queue_n;
+			for (; queue_i < queue_n0; queue_i++) {
 				uint32_t qv = g.tmp_queue[queue_i];
 
-				if (IS_OUTCOME(qv)) break;
+				if (IS_OUTCOME(qv)) {
+					zvm_assert(queue_span_n_drains > 0);
+					break;
+				}
 
 				const int drain_index = GET_VALUE(qv);
 				struct drout* drain = &g.tmp_drains[drain_index];
@@ -1304,12 +1305,11 @@ static void process_substance(uint32_t substance_id)
 			continue;
 		}
 
-		zvm_assert(!has_drains && has_outcomes);
+		zvm_assert(queue_span_n_drains == 0 && queue_span_n_outcomes > 0);
 
 		// now there are only outcomes in the [queue_i;queue_n]
 		// interval.
 
-		compar_drouts = g.tmp_outcomes;
 		qsort(&g.tmp_queue[queue_i], queue_n-queue_i, sizeof(*g.tmp_queue), queue_outcome_pi_compar);
 
 		#if 0
@@ -1331,16 +1331,22 @@ static void process_substance(uint32_t substance_id)
 			struct module* instance_mod = &g.modules[instance_module_id];
 
 			const int n_instance_outputs = instance_mod->n_outputs;
+
 			uint32_t* node_bs32 = get_node_output_bs32(mod);
 
-			// a call is "full" if the inferred outcome
-			// request is identical to the remaining
-			// outcome request
 			int is_full_call = 1;
 			int ii = 0;
 			int requesting_state = module_has_state(instance_mod) && outcome_request_state_test(key.outcome_request_bs32i);
 			int n_checks = n_instance_outputs + (requesting_state ? 1 : 0);
-			for (int j = 0; j < n_checks; j++) {
+			if (n_checks > (queue_n-queue_i)) {
+				// if queue size is smaller than the number of
+				// outcomes required for a "full call", then it
+				// cannot possibly be a "full call"
+				is_full_call = 0;
+			} else for (int j = 0; j < n_checks; j++) {
+				// a call is "full" if the inferred outcome
+				// request is identical to the remaining
+				// outcome request
 				const int is_output = (j < n_instance_outputs);
 				const int is_state  = (j == n_instance_outputs);
 
@@ -1369,7 +1375,6 @@ static void process_substance(uint32_t substance_id)
 				zvm_assert(ii == pspan_length);
 			}
 
-
 			if (is_full_call) n_full_calls++;
 
 			for (int j = 0; j < pspan_length; j++) {
@@ -1383,7 +1388,6 @@ static void process_substance(uint32_t substance_id)
 		if (n_full_calls > 0) {
 			{
 				// place full calls in beginning of queue
-				compar_drouts = g.tmp_outcomes;
 				qsort(&g.tmp_queue[queue_i], queue_n-queue_i, sizeof(*g.tmp_queue), queue_outcome_full_compar);
 			}
 
@@ -1417,6 +1421,16 @@ static void process_substance(uint32_t substance_id)
 			// current attempt at a heuristic solution is
 			// to pick the first partial call and continue
 			// :)
+
+
+			// XXX ... only "full calls" should be allowed to
+			// request state... this is due to the invariant that
+			// all state-reads must come before state-write (for
+			// the same state bit(s))... so... the state outcome is
+			// always last, no?
+
+			zvm_assert(!"NOT IMPLEMENTED");
+
 
 			int pspan_length = queue_outcome_get_pspan_length(&g.tmp_queue[queue_i], queue_n-queue_i, 0);
 			uint32_t p0 = g.tmp_outcomes[GET_VALUE(g.tmp_queue[queue_i])].p;
