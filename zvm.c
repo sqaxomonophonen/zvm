@@ -1284,7 +1284,7 @@ static void process_substance(uint32_t substance_id)
 				uint32_t qv = g.tmp_queue[queue_i];
 
 				if (IS_OUTCOME(qv)) {
-					zvm_assert(queue_span_n_drains > 0);
+					zvm_assert(queue_span_n_outcomes > 0);
 					break;
 				}
 
