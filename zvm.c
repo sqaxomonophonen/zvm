@@ -779,21 +779,6 @@ static int produce_substance_id_for_key(struct substance_key* key, int* did_inse
 }
 
 
-// "DROUT" = "drain or outcome", which happens to share the same structure...
-#if 0
-enum {
-	DROUT_P = 0,
-	DROUT_INDEX,
-	DROUT_COUNTER,
-	DROUT_DECR_LIST_N,
-	DROUT_DECR_LIST_P,
-	DROUT_USR,
-	DROUT_LEN,
-};
-#endif
-
-#define DROUT_SZ (DROUT_LEN * sizeof(uint32_t))
-
 static int drout_compar(const void* va, const void* vb)
 {
 	const struct drout* a = va;
