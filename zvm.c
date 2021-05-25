@@ -1404,13 +1404,23 @@ static void process_substance(uint32_t substance_id)
 			int pspan_length = queue_outcome_get_pspan_length(&g.tmp_queue[queue_i], queue_n-queue_i, 0);
 			uint32_t p0 = g.tmp_outcomes[GET_VALUE(g.tmp_queue[queue_i])].p;
 
+			// non-closing substances are not allowed to request
+			// state, so exclude the state request if present. this
+			// makes it easier to enforce that state is never
+			// written before the last read
+			struct drout* last_outcome = &g.tmp_outcomes[GET_VALUE(g.tmp_queue[queue_i + pspan_length - 1])];
+			if (last_outcome->index == ZVM_NIL_ID) {
+				struct module* instance_mod = get_instance_mod_at_p(p0);
+				int requesting_state = module_has_state(instance_mod) && outcome_request_state_test(key.outcome_request_bs32i);
+				zvm_assert(requesting_state && "found state outcome but not requesting state?");
+				pspan_length--;
+			}
 
-			struct module* instance_mod = get_instance_mod_at_p(p0);
-
-
-
-			// XXX FIXME; state must NEVER be requested, unless
-			// closing
+			#ifdef DEBUG
+			for (int i = 0; i < pspan_length; i++) {
+				zvm_assert((g.tmp_outcomes[GET_VALUE(g.tmp_queue[queue_i + i])].index != ZVM_NIL_ID) && "state outcome not allowed at this point");
+			}
+			#endif
 
 			ack_substance(
 				p0,
