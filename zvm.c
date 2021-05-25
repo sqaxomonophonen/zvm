@@ -604,11 +604,11 @@ int zvm_end_module()
 		while (p < p_end) {
 			int n_node_outputs = get_op_n_outputs(p);
 
-			uint32_t code = *bufp(p);
-			int op = code & ZVM_OP_MASK;
-
 			// setup outputs and n_bits
 			if (pass == 0) {
+				uint32_t code = *bufp(p);
+				int op = code & ZVM_OP_MASK;
+
 				if (op == ZVM_OP(OUTPUT)) {
 					int output_index = code >> ZVM_OP_BITS;
 					zvm_assert(0 <= output_index && output_index < mod->n_outputs);
@@ -616,12 +616,12 @@ int zvm_end_module()
 					zvm_assert((output->p == ZVM_PLACEHOLDER) && "double assignment");
 					output->p = *bufp(zvm__arg_index(p, 0));
 				} else if (op == ZVM_OP(UNIT_DELAY)) {
-					mod->n_bits++;
+					mod->n_bits++; // XXX might not be connected?
 				} else if (op == ZVM_OP(INSTANCE)) {
 					int module_id = code >> ZVM_OP_BITS;
 					zvm_assert(is_valid_module_id(module_id));
 					struct module* mod2 = &g.modules[module_id];
-					mod->n_bits += mod2->n_bits;
+					mod->n_bits += mod2->n_bits; // XXX might not be connected?
 				}
 			}
 
