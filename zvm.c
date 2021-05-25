@@ -1271,10 +1271,11 @@ static void process_substance(uint32_t substance_id)
 		}
 
 		if (queue_span_n_drains > 0) {
-			// execute drains as long as they're available
+			// keep executing drains, and remove them from queue,
+			// as long as they're available...
 
-			if (queue_span_n_drains > 0) {
-				// move outcomes to end
+			// move outcomes to end, if any
+			if (queue_span_n_outcomes > 0) {
 				qsort(&g.tmp_queue[queue_i], queue_n-queue_i, sizeof(*g.tmp_queue), queue_drain_outcome_compar);
 			}
 
@@ -1387,11 +1388,8 @@ static void process_substance(uint32_t substance_id)
 		}
 
 		if (n_closing_substances > 0) {
-			{
-				// place closing substances in beginning of
-				// queue
-				qsort(&g.tmp_queue[queue_i], queue_n-queue_i, sizeof(*g.tmp_queue), queue_outcome_closing_compar);
-			}
+			// place closing substances in beginning of queue
+			qsort(&g.tmp_queue[queue_i], queue_n-queue_i, sizeof(*g.tmp_queue), queue_outcome_closing_compar);
 
 			int queue_n0 = queue_n;
 			while (n_closing_substances > 0 && queue_i < queue_n0) {
