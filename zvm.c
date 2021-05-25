@@ -52,8 +52,10 @@ struct substance {
 	struct substance_key key;
 	uint32_t steps_len;
 	uint32_t steps_i;
+	#if 0
 	int tag;
 	int refcount;
+	#endif
 };
 
 struct drout {
@@ -1498,6 +1500,7 @@ static void process_substance(uint32_t substance_id)
 	}
 }
 
+#if 0
 static void analyze_substance_rec(int substance_id)
 {
 	struct substance* sb = &g.substances[substance_id];
@@ -1572,6 +1575,7 @@ static void transmogrify_main_substance(int main_substance_id)
 	clear_substance_tags();
 	transmogrify_substance_rec(main_substance_id);
 }
+#endif
 
 void zvm_end_program(uint32_t main_module_id)
 {
@@ -1593,9 +1597,10 @@ void zvm_end_program(uint32_t main_module_id)
 	process_substance(g.main_substance_id = produce_substance_id_for_key(&main_key, &did_insert));
 	zvm_assert(did_insert);
 
+	#if 0
 	analyze_main_substance(g.main_substance_id);
-
 	transmogrify_main_substance(g.main_substance_id);
+	#endif
 
 	// have a look at
 	// https://compileroptimizations.com/
