@@ -50,12 +50,10 @@ struct substance_keyval {
 
 struct substance {
 	struct substance_key key;
-	uint32_t steps_len;
+	uint32_t n_steps;
 	uint32_t steps_i;
-	#if 0
 	int tag;
 	int refcount;
-	#endif
 };
 
 struct drout {
@@ -72,14 +70,22 @@ struct step {
 	uint32_t substance_id;
 };
 
+struct function {
+	uint32_t substance_id;
+	uint32_t bytecode_i;
+	uint32_t bytecode_n;
+};
+
 struct globals {
 	struct module* modules;
 	struct node_output* node_outputs;
 	struct substance_keyval* substance_keyvals;
 	struct substance* substances;
+	struct function* functions;
 	struct output* outputs;
 	struct step* steps;
 	uint32_t* bs32s;
+	uint32_t* bytecode;
 
 	struct drout* tmp_drains;
 	struct drout* tmp_outcomes;
@@ -203,6 +209,7 @@ static inline uint32_t bs32_mask(int n)
 	return (1<<n)-1;
 }
 
+#if 0
 static inline int bs32_equal(int n, uint32_t* a, uint32_t* b)
 {
 	for (; n>32; a++,b++,n-=32) if (*a != *b) return 0;
@@ -232,7 +239,7 @@ static inline int bs32_popcnt(int n, uint32_t* bs)
 	for (int i = 0; i < n; i++) if (bs32_test(bs, i)) popcnt++;
 	return popcnt;
 }
-
+#endif
 
 static inline void bs32_fill(int n, uint32_t* bs, int v)
 {
@@ -244,6 +251,7 @@ static inline void bs32_clear_all(int n, uint32_t* bs)
 	bs32_fill(n, bs, 0);
 }
 
+#if 0
 static inline void bs32_copy(int n, uint32_t* dst, uint32_t* src)
 {
 	memcpy(dst, src, bs32_n_bytes(n));
@@ -254,6 +262,7 @@ static inline void bs32_intersection_inplace(int n, uint32_t* dst, uint32_t* src
 	for (; n>32; dst++,src++,n-=32) *dst &= *src;
 	(*dst) &= *src | ~bs32_mask(n);
 }
+#endif
 
 static int bs32_cmp(int n, uint32_t* a, uint32_t* b)
 {
@@ -1472,7 +1481,7 @@ static void process_substance(uint32_t substance_id)
 
 		queue_i += pspan_length;
 	}
-	sb->steps_len = zvm_arrlen(g.steps) - sb->steps_i;
+	sb->n_steps = zvm_arrlen(g.steps) - sb->steps_i;
 
 	#if 0
 	#ifdef VERBOSE_DEBUG
@@ -1496,8 +1505,7 @@ static void process_substance(uint32_t substance_id)
 	}
 }
 
-#if 0
-static void analyze_substance_rec(int substance_id)
+static void emit_functions_rec(int substance_id)
 {
 	struct substance* sb = &g.substances[substance_id];
 
@@ -1506,14 +1514,20 @@ static void analyze_substance_rec(int substance_id)
 	if (sb->tag) return;
 	sb->tag = 1;
 
-	const int steps_len = sb->steps_len;
-	for (int i = 0; i < steps_len; i++) {
+	const int n_steps = sb->n_steps;
+	for (int i = 0; i < n_steps; i++) {
 		struct step* step = &g.steps[sb->steps_i + i];
 		if (step->substance_id == ZVM_NIL_ID) {
 			continue;
 		}
-		analyze_substance_rec(step->substance_id);
+		emit_functions_rec(step->substance_id);
 	}
+
+	struct function fn = {
+		.substance_id = substance_id,
+	};
+
+	zvm_arrpush(g.functions, fn);
 
 	// TODO can I do some local analysis here...?
 	//
@@ -1543,11 +1557,32 @@ static void clear_substance_tags()
 	}
 }
 
-static void analyze_main_substance(int main_substance_id)
+static void emit_function_code(uint32_t function_id)
+{
+	struct function* fn = &g.functions[function_id];
+	fn->bytecode_i = zvm_arrlen(g.bytecode);
+
+	struct substance* sb = &g.substances[fn->substance_id];
+
+	printf("function %d\n", function_id);
+
+	for (int i = 0; i < sb->n_steps; i++) {
+		struct step* step = &g.steps[sb->steps_i + i];
+		printf("%d %d\n", step->p0, step->substance_id);
+	}
+}
+
+static void emit_functions()
 {
 	clear_substance_tags();
-	analyze_substance_rec(main_substance_id);
+	emit_functions_rec(g.main_substance_id);
 
+	const int n_functions = zvm_arrlen(g.functions);
+	for (int i = 0; i < n_functions; i++) {
+		emit_function_code(i);
+	}
+
+	#if 0
 	#ifdef VERBOSE_DEBUG
 	const int n_substances = zvm_arrlen(g.substances);
 	for (int i = 0; i < n_substances; i++) {
@@ -1557,21 +1592,9 @@ static void analyze_main_substance(int main_substance_id)
 	}
 	printf("\n");
 	#endif
+	#endif
 }
 
-static void transmogrify_substance_rec(int substance_id)
-{
-	struct substance* sb = &g.substances[substance_id];
-	if (sb->tag) return;
-	sb->tag = 1;
-}
-
-static void transmogrify_main_substance(int main_substance_id)
-{
-	clear_substance_tags();
-	transmogrify_substance_rec(main_substance_id);
-}
-#endif
 
 void zvm_end_program(uint32_t main_module_id)
 {
@@ -1593,10 +1616,7 @@ void zvm_end_program(uint32_t main_module_id)
 	process_substance(g.main_substance_id = produce_substance_id_for_key(&main_key, &did_insert));
 	zvm_assert(did_insert);
 
-	#if 0
-	analyze_main_substance(g.main_substance_id);
-	transmogrify_main_substance(g.main_substance_id);
-	#endif
+	emit_functions();
 
 	// have a look at
 	// https://compileroptimizations.com/
@@ -1616,7 +1636,7 @@ void zvm_end_program(uint32_t main_module_id)
 		printf(" rq=");
 		bs32_print(outcome_request_sz, bufp(key->outcome_request_bs32i));
 
-		printf(" steps_len=%d", sb->steps_len);
+		printf(" n_steps=%d", sb->n_steps);
 
 		printf("\n");
 	}
