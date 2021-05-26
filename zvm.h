@@ -5,11 +5,11 @@
 
 #define ZVM_OPS \
 	\
-	ZOP(NOR,2) \
-	ZOP(UNIT_DELAY,1) \
-	ZOP(INSTANCE,-1) \
-	ZOP(UNPACK,1) \
-	ZOP(OUTPUT,1)
+	DEFOP(NOR,2) \
+	DEFOP(UNIT_DELAY,1) \
+	DEFOP(INSTANCE,-1) \
+	DEFOP(UNPACK,1) \
+	DEFOP(OUTPUT,1)
 
 
 #define ZVM_OP(op) ZVM_OP_##op
@@ -45,9 +45,9 @@
 
 enum zvm_ops {
 	ZVM_OP_NIL = 0,
-	#define ZOP(op,narg) ZVM_OP(op),
+	#define DEFOP(op,narg) ZVM_OP(op),
 	ZVM_OPS
-	#undef ZOP
+	#undef DEFOP
 	ZVM_OP_N
 };
 

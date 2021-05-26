@@ -26,7 +26,16 @@ struct module {
 
 	int n_node_outputs;
 	uint32_t node_outputs_i;
+	uint32_t node_output_map_i;
 	uint32_t node_output_bs32i;
+
+	uint32_t unit_delay_index_map_i;
+	uint32_t unit_delay_index_map_n;
+};
+
+struct unit_delay_index {
+	uint32_t p;
+	uint32_t index;
 };
 
 struct node_output {
@@ -66,7 +75,7 @@ struct drout {
 };
 
 struct step {
-	uint32_t p0;
+	uint32_t p;
 	uint32_t substance_id;
 };
 
@@ -79,6 +88,7 @@ struct function {
 struct globals {
 	struct module* modules;
 	struct node_output* node_outputs;
+	uint32_t* node_output_maps;
 	struct substance_keyval* substance_keyvals;
 	struct substance* substances;
 	struct function* functions;
@@ -86,6 +96,7 @@ struct globals {
 	struct step* steps;
 	uint32_t* bs32s;
 	uint32_t* bytecode;
+	struct unit_delay_index* unit_delay_index_maps;
 
 	struct drout* tmp_drains;
 	struct drout* tmp_outcomes;
@@ -209,20 +220,20 @@ static inline uint32_t bs32_mask(int n)
 	return (1<<n)-1;
 }
 
-#if 0
-static inline int bs32_equal(int n, uint32_t* a, uint32_t* b)
-{
-	for (; n>32; a++,b++,n-=32) if (*a != *b) return 0;
-	if ((*a & bs32_mask(n)) != (*b & bs32_mask(n))) return 0;
-	return 1;
-}
-
 static inline void bs32_union_inplace(int n, uint32_t* dst, uint32_t* src)
 {
 	const int n_words = bs32_n_words(n);
 	for (int i = 0; i < n_words; i++) {
 		dst[i] |= src[i];
 	}
+}
+
+#if 0
+static inline int bs32_equal(int n, uint32_t* a, uint32_t* b)
+{
+	for (; n>32; a++,b++,n-=32) if (*a != *b) return 0;
+	if ((*a & bs32_mask(n)) != (*b & bs32_mask(n))) return 0;
+	return 1;
 }
 
 static inline void bs32_sub_inplace(int n, uint32_t* dst, uint32_t* src)
@@ -364,9 +375,9 @@ static inline int get_op_n_args(uint32_t code)
 		return get_instance_mod_for_code(code)->n_inputs;
 	}
 	switch (op) {
-	#define ZOP(op,narg) case ZVM_OP(op): zvm_assert(narg >= 0); return narg;
+	#define DEFOP(op,narg) case ZVM_OP(op): zvm_assert(narg >= 0); return narg;
 	ZVM_OPS
-	#undef ZOP
+	#undef DEFOP
 	default: zvm_assert(!"unhandled op"); return 0;
 	}
 }
@@ -596,6 +607,9 @@ int zvm_end_module()
 	}
 
 	struct node_output* np = NULL;
+
+	mod->unit_delay_index_map_i = zvm_arrlen(g.unit_delay_index_maps);
+
 	for (int pass = 0; pass < 2; pass++) {
 		int n_nodes_total = 0;
 
@@ -617,6 +631,11 @@ int zvm_end_module()
 					output->p = *bufp(zvm__arg_index(p, 0));
 				} else if (op == ZVM_OP(UNIT_DELAY)) {
 					mod->n_bits++; // XXX might not be connected?
+					struct unit_delay_index x = {
+						.p = p,
+						.index = mod->unit_delay_index_map_n++,
+					};
+					zvm_arrpush(g.unit_delay_index_maps, x);
 				} else if (op == ZVM_OP(INSTANCE)) {
 					struct module* instance_mod = get_instance_mod_for_code(code);
 					mod->n_bits += instance_mod->n_bits; // XXX might not be connected?
@@ -640,6 +659,7 @@ int zvm_end_module()
 			mod->n_node_outputs = n_nodes_total;
 			np = zvm_arradd(g.node_outputs, mod->n_node_outputs);
 			mod->node_outputs_i = np - g.node_outputs;
+			mod->node_output_map_i = zvm_arradd(g.node_output_maps, mod->n_node_outputs) - g.node_output_maps;
 		} else if (pass == 1) {
 			// qsort not necessary; nodes are inserted in ascending
 			// order
@@ -677,6 +697,23 @@ int zvm_end_module()
 	#endif
 
 	return module_id;
+}
+
+static uint32_t node_output_map_get(struct module* mod, struct node_output* k)
+{
+	return g.node_output_maps[mod->node_output_map_i + get_node_index(mod, k)];
+}
+
+static void node_output_map_set(struct module* mod, struct node_output* k, uint32_t value)
+{
+	g.node_output_maps[mod->node_output_map_i + get_node_index(mod, k)] = value;
+}
+
+static void node_output_map_fill(struct module* mod, uint32_t value)
+{
+	uint32_t* xs = &g.node_output_maps[mod->node_output_map_i];
+	const int n = mod->n_node_outputs;
+	for (int i = 0; i < n; i++) xs[i] = value;
 }
 
 static int substance_key_cmp(const void* va, const void* vb)
@@ -942,9 +979,9 @@ static int queue_outcome_get_pspan_length(uint32_t* queue, int n, int break_on_d
 	return n;
 }
 
-static void push_step(uint32_t p0, uint32_t ack_substance_id)
+static void push_step(uint32_t p, uint32_t substance_id)
 {
-	struct step step = { .p0 = p0, .substance_id = ack_substance_id };
+	struct step step = { .p = p, .substance_id = substance_id };
 	zvm_arrpush(g.steps, step);
 }
 
@@ -1557,18 +1594,171 @@ static void clear_substance_tags()
 	}
 }
 
+static uint32_t fn_trace(struct module* mod, uint32_t p)
+{
+
+	return 0; // XXX
+}
+
+static int get_unit_delay_index(struct module* mod, uint32_t p)
+{
+	struct unit_delay_index* xs = &g.unit_delay_index_maps[mod->unit_delay_index_map_i];
+	int left = 0;
+	int right = mod->unit_delay_index_map_n - 1;
+	while (left <= right) {
+		int mid = (left+right) >> 1;
+		uint32_t t = xs[mid].p;
+		if (t < p) {
+			left = mid + 1;
+		} else if (t > p) {
+			right = mid - 1;
+		} else {
+			return mid;
+		}
+	}
+	zvm_assert(!"unit delay p not found");
+}
+
+#define OPS \
+	\
+	DEFOP(STATEFUL_CALL,3) \
+	DEFOP(STATELESS_CALL,2) \
+	DEFOP(RETURN,0) \
+	DEFOP(ARITH_2_1,3) \
+	DEFOP(ARITH_1_1,2) \
+	DEFOP(MOVE,2) \
+	DEFOP(WRITE,2) \
+	DEFOP(READ,2)
+
+
+
+#define OP(op) OP_##op
+
+enum ops {
+	OP_NIL = 0,
+	#define DEFOP(op,narg) OP(op),
+	OPS
+	#undef DEFOP
+	OP_N
+};
+
+static void emit_bytecode(uint32_t bc)
+{
+	zvm_arrpush(g.bytecode, bc);
+}
+
+static void emit_state_write(struct module* mod, uint32_t p, uint32_t reg)
+{
+	int state_index = get_unit_delay_index(mod, p);
+	emit_bytecode(OP(WRITE));
+	emit_bytecode(state_index);
+	emit_bytecode(reg);
+}
+
+static void emit_call_stub(uint32_t function_id)
+{
+	emit_bytecode(0); // XXX
+	struct function* fn = &g.functions[function_id];
+	emit_bytecode(fn->bytecode_i);
+}
+
+static void emit_call_arg(uint32_t reg)
+{
+	zvm_arrpush(g.bytecode, reg);
+}
+
+static uint32_t resolve_function_id_for_substance_id(uint32_t substance_id)
+{
+	// XXX somewhat naive lookup?
+	const int n_functions = zvm_arrlen(g.functions);
+	for (int function_id = 0; function_id < n_functions; function_id++) {
+		struct function* fn = &g.functions[function_id];
+		if (fn->substance_id == substance_id) {
+			return function_id;
+		}
+	}
+	zvm_assert(!"substance id not found");
+}
+
 static void emit_function_code(uint32_t function_id)
 {
 	struct function* fn = &g.functions[function_id];
 	fn->bytecode_i = zvm_arrlen(g.bytecode);
 
 	struct substance* sb = &g.substances[fn->substance_id];
+	struct module* mod = &g.modules[sb->key.module_id];
 
-	printf("function %d\n", function_id);
+	//printf("function %d\n", function_id);
+
+	// bum bum...
+	//  - jeg tænker at have en register allocator, der egentlig bare er en
+	//    counter... så den skal sættes til 0 her?
+	//  - node output map...? hvor jeg gemmer registre?
+
+	node_output_map_fill(mod, ZVM_NIL_ID);
 
 	for (int i = 0; i < sb->n_steps; i++) {
 		struct step* step = &g.steps[sb->steps_i + i];
-		printf("%d %d\n", step->p0, step->substance_id);
+
+		const int is_unit_delay = (step->substance_id == ZVM_NIL_ID);
+
+		if (is_unit_delay) {
+			uint32_t reg = fn_trace(mod, *bufp(zvm__arg_index(step->p, 0)));
+			emit_state_write(mod, step->p, reg);
+		} else {
+			struct substance* step_sb = &g.substances[step->substance_id];
+			struct module* step_mod = &g.modules[step_sb->key.module_id];
+			zvm_assert((step_sb->key.module_id == (*bufp(step->p) >> ZVM_OP_BITS)) && "subkey/op module id mismatch");
+
+			//const int outcome_request_sz = get_module_outcome_request_sz(mod);
+			uint32_t outcome_request_bs32i = step_sb->key.outcome_request_bs32i;
+
+			const int n_inputs = step_mod->n_inputs;
+			const int n_outputs = step_mod->n_outputs;
+
+			bs32s_save_len();
+			uint32_t* input_set_bs32 = bs32p(bs32_alloc(n_inputs));
+
+			// for each requested outcome, add the coresponding
+			// input dependencies to the input set
+			for (int output_index = 0; output_index < n_outputs; output_index++) {
+				if (!outcome_request_output_test(outcome_request_bs32i, output_index)) {
+					continue;
+				}
+				bs32_union_inplace(n_inputs, input_set_bs32, get_output_input_dep_bs32(step_mod, output_index));
+			}
+			if (outcome_request_state_test(outcome_request_bs32i)) {
+				bs32_union_inplace(n_inputs, input_set_bs32, get_state_input_dep_bs32(step_mod));
+			}
+
+			// trace twice; second pass will not emit any code,
+			// allowing us to emit the result registers as call
+			// arguments
+			for (int pass = 0; pass < 2; pass++) {
+				if (pass == 1) {
+					uint32_t call_function_id = resolve_function_id_for_substance_id(step->substance_id);
+					zvm_assert((call_function_id < function_id) && "call to function not yet emitted");
+					emit_call_stub(function_id);
+				}
+
+				for (int input_index = 0; input_index < n_inputs; input_index++) {
+					if (!bs32_test(input_set_bs32, input_index)) {
+						continue;
+					}
+					int bytecode_top = zvm_arrlen(g.bytecode);
+					uint32_t reg = fn_trace(mod, *bufp(zvm__arg_index(step->p, input_index)));
+					if (pass == 1) {
+						zvm_assert((bytecode_top == zvm_arrlen(g.bytecode)) && "did not expect bytecode to mutate");
+						emit_call_arg(reg);
+					}
+				}
+			}
+
+			// TODO ... I uh... have to... uh... this relates to
+			// packing and unpacking :) or uh...
+
+			bs32s_restore_len();
+		}
 	}
 }
 
