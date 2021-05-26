@@ -1721,8 +1721,9 @@ static uint32_t fn_trace_rec(struct fn_tracer* ft, uint32_t p, int unpack_index)
 		//    but promote them to actual nodes
 		//  - have special one/zero const registers (some real
 		//    architectures have a register that's always zero)
-		//  - alloc constant registers on demand, based on const values
-		//    (there are only two possible bit values)
+		//  - alloc constant registers on demand, once per constant,
+		//    and store them somewhere in fn_tracer; there are only two
+		//    possible constant values (0/1) at this point
 		//  - ignore it and save it for later optimization?
 		emit3(OP(LOADIMM), dst, v);
 		return dst;
