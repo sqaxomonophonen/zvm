@@ -1594,12 +1594,6 @@ static void clear_substance_tags()
 	}
 }
 
-static uint32_t fn_trace(struct module* mod, uint32_t p)
-{
-
-	return 0; // XXX
-}
-
 static int get_unit_delay_index(struct module* mod, uint32_t p)
 {
 	struct unit_delay_index* xs = &g.unit_delay_index_maps[mod->unit_delay_index_map_i];
@@ -1628,7 +1622,8 @@ static int get_unit_delay_index(struct module* mod, uint32_t p)
 	DEFOP(ARITH_1_1,2) \
 	DEFOP(MOVE,2) \
 	DEFOP(WRITE,2) \
-	DEFOP(READ,2)
+	DEFOP(READ,2) \
+	DEFOP(LOADIMM,2)
 
 
 
@@ -1642,29 +1637,35 @@ enum ops {
 	OP_N
 };
 
-static void emit_bytecode(uint32_t bc)
+static void emit1(uint32_t x0)
 {
-	zvm_arrpush(g.bytecode, bc);
+	zvm_arrpush(g.bytecode, x0);
 }
 
-static void emit_state_write(struct module* mod, uint32_t p, uint32_t reg)
+#if 0
+static void emit2(uint32_t x0, uint32_t x1)
 {
-	int state_index = get_unit_delay_index(mod, p);
-	emit_bytecode(OP(WRITE));
-	emit_bytecode(state_index);
-	emit_bytecode(reg);
+	uint32_t* xs = zvm_arradd(g.bytecode, 2);
+	xs[0] = x0;
+	xs[1] = x1;
+}
+#endif
+
+static void emit3(uint32_t x0, uint32_t x1, uint32_t x2)
+{
+	uint32_t* xs = zvm_arradd(g.bytecode, 3);
+	xs[0] = x0;
+	xs[1] = x1;
+	xs[2] = x2;
 }
 
-static void emit_call_stub(uint32_t function_id)
+static void emit4(uint32_t x0, uint32_t x1, uint32_t x2, uint32_t x3)
 {
-	emit_bytecode(0); // XXX
-	struct function* fn = &g.functions[function_id];
-	emit_bytecode(fn->bytecode_i);
-}
-
-static void emit_call_arg(uint32_t reg)
-{
-	zvm_arrpush(g.bytecode, reg);
+	uint32_t* xs = zvm_arradd(g.bytecode, 4);
+	xs[0] = x0;
+	xs[1] = x1;
+	xs[2] = x2;
+	xs[3] = x3;
 }
 
 static uint32_t resolve_function_id_for_substance_id(uint32_t substance_id)
@@ -1680,6 +1681,103 @@ static uint32_t resolve_function_id_for_substance_id(uint32_t substance_id)
 	zvm_assert(!"substance id not found");
 }
 
+struct fn_tracer {
+	struct module* mod;
+	uint32_t next_register;
+};
+
+static void fn_tracer_init(struct fn_tracer* ft, struct module* mod)
+{
+	memset(ft, 0, sizeof *ft);
+	ft->mod = mod;
+}
+
+static uint32_t fn_tracer_alloc_register(struct fn_tracer* ft)
+{
+	return ft->next_register++;
+}
+
+static void fn_tracer_hawk_registers(struct fn_tracer* ft, int n)
+{
+	ft->next_register += n;
+}
+
+static uint32_t fn_trace_rec(struct fn_tracer* ft, uint32_t p, int unpack_index)
+{
+	if (ZVM_IS_SPECIALX(p, ZVM_X_CONST)) {
+		zvm_assert((unpack_index == -1) && "unexpected unpack");
+		uint32_t v = 0;
+		if (p == ZVM_ZERO) {
+			v = 0;
+		} else if (p == ZVM_ONE) {
+			v = 1;
+		} else {
+			zvm_assert(!"unhandled const");
+		}
+		uint32_t dst = fn_tracer_alloc_register(ft);
+		// XXX register ought to be stored in node output map, but a
+		// CONST has no node... possible solutions:
+		//  - don't use SPECIAL values for constants on "the outside",
+		//    but promote them to actual nodes
+		//  - have special one/zero const registers (some real
+		//    architectures have a register that's always zero)
+		//  - alloc constant registers on demand, based on const values
+		//    (there are only two possible bit values)
+		//  - ignore it and save it for later optimization?
+		emit3(OP(LOADIMM), dst, v);
+		return dst;
+	}
+
+	if (ZVM_IS_SPECIALX(p, ZVM_X_INPUT)) {
+		zvm_assert((unpack_index == -1) && "unexpected unpack");
+		return 0; // XXX how do I find the input register?
+	}
+
+	assert(!ZVM_IS_SPECIAL(p));
+
+	zvm_assert((ft->mod->code_begin_p <= p && p < ft->mod->code_end_p) && "p out of range");
+
+	int node_output_index = (unpack_index == -1) ? 0 : unpack_index;
+	zvm_assert(node_output_index >= 0);
+	uint32_t stored_reg = node_output_map_get(ft->mod, &(struct node_output) { .p = p, .index = node_output_index });
+	if (stored_reg != ZVM_NIL_ID) {
+		return stored_reg;
+	}
+
+	uint32_t code = *bufp(p);
+	int op = code & ZVM_OP_MASK;
+
+	if (op == ZVM_OP(UNPACK)) {
+		zvm_assert((unpack_index == -1) && "double unpack");
+		return fn_trace_rec(ft, *bufp(zvm__arg_index(p, 0)), code >> ZVM_OP_BITS);
+	} else if (op == ZVM_OP(NOR)) {
+		zvm_assert((unpack_index == -1) && "unexpected unpack");
+		uint32_t src0_reg = fn_trace_rec(ft, *bufp(zvm__arg_index(p, 0)), -1);
+		uint32_t src1_reg = fn_trace_rec(ft, *bufp(zvm__arg_index(p, 1)), -1);
+		uint32_t dst_reg = fn_tracer_alloc_register(ft);
+		emit4(OP(ARITH_2_1), dst_reg, src0_reg, src1_reg); // XXX NOR where?
+		return dst_reg;
+	} else if (op == ZVM_OP(UNIT_DELAY)) {
+		zvm_assert((unpack_index == -1) && "unexpected unpack");
+		uint32_t dst_reg = fn_tracer_alloc_register(ft);
+		uint32_t state_index = 0; // XXX where do I find state index ?
+		emit3(OP(READ), dst_reg, state_index);
+		return dst_reg;
+	} else if (op == ZVM_OP(INSTANCE)) {
+		zvm_assert(!"expected instance node output to already be populated");
+	} else {
+		zvm_assert(!"unhandled op");
+	}
+
+	zvm_assert(!"unreachable");
+	return 0;
+}
+
+static uint32_t fn_trace(struct fn_tracer* ft, uint32_t p)
+{
+	return fn_trace_rec(ft, p, -1);
+}
+
 static void emit_function_code(uint32_t function_id)
 {
 	struct function* fn = &g.functions[function_id];
@@ -1688,14 +1786,10 @@ static void emit_function_code(uint32_t function_id)
 	struct substance* sb = &g.substances[fn->substance_id];
 	struct module* mod = &g.modules[sb->key.module_id];
 
-	//printf("function %d\n", function_id);
-
-	// bum bum...
-	//  - jeg tænker at have en register allocator, der egentlig bare er en
-	//    counter... så den skal sættes til 0 her?
-	//  - node output map...? hvor jeg gemmer registre?
-
 	node_output_map_fill(mod, ZVM_NIL_ID);
+
+	struct fn_tracer ft;
+	fn_tracer_init(&ft, mod);
 
 	for (int i = 0; i < sb->n_steps; i++) {
 		struct step* step = &g.steps[sb->steps_i + i];
@@ -1703,14 +1797,20 @@ static void emit_function_code(uint32_t function_id)
 		const int is_unit_delay = (step->substance_id == ZVM_NIL_ID);
 
 		if (is_unit_delay) {
-			uint32_t reg = fn_trace(mod, *bufp(zvm__arg_index(step->p, 0)));
-			emit_state_write(mod, step->p, reg);
+			uint32_t src_reg = fn_trace(&ft, *bufp(zvm__arg_index(step->p, 0)));
+			emit3(OP(WRITE), get_unit_delay_index(mod, step->p), src_reg);
 		} else {
+			uint32_t call_function_id = resolve_function_id_for_substance_id(step->substance_id);
+			zvm_assert((call_function_id < function_id) && "call to function not yet emitted");
+
 			struct substance* step_sb = &g.substances[step->substance_id];
 			struct module* step_mod = &g.modules[step_sb->key.module_id];
+
+			int stateful_call = module_has_state(step_mod);
+			zvm_assert((!stateful_call || module_has_state(mod)) && "stateful call inside stateless function");
+
 			zvm_assert((step_sb->key.module_id == (*bufp(step->p) >> ZVM_OP_BITS)) && "subkey/op module id mismatch");
 
-			//const int outcome_request_sz = get_module_outcome_request_sz(mod);
 			uint32_t outcome_request_bs32i = step_sb->key.outcome_request_bs32i;
 
 			const int n_inputs = step_mod->n_inputs;
@@ -1719,47 +1819,58 @@ static void emit_function_code(uint32_t function_id)
 			bs32s_save_len();
 			uint32_t* input_set_bs32 = bs32p(bs32_alloc(n_inputs));
 
+			const uint32_t reg_base = ft.next_register;
+
 			// for each requested outcome, add the coresponding
 			// input dependencies to the input set
+			int n_retvals = 0;
 			for (int output_index = 0; output_index < n_outputs; output_index++) {
 				if (!outcome_request_output_test(outcome_request_bs32i, output_index)) {
 					continue;
 				}
+
+				// add to set
 				bs32_union_inplace(n_inputs, input_set_bs32, get_output_input_dep_bs32(step_mod, output_index));
+
+				// populate return value registers in node output map
+				uint32_t output_reg = reg_base + (n_retvals++);
+				node_output_map_set(mod, &((struct node_output) { .p = step->p, .index = output_index }), output_reg);
 			}
 			if (outcome_request_state_test(outcome_request_bs32i)) {
 				bs32_union_inplace(n_inputs, input_set_bs32, get_state_input_dep_bs32(step_mod));
 			}
 
-			// trace twice; second pass will not emit any code,
-			// allowing us to emit the result registers as call
-			// arguments
-			for (int pass = 0; pass < 2; pass++) {
-				if (pass == 1) {
-					uint32_t call_function_id = resolve_function_id_for_substance_id(step->substance_id);
-					zvm_assert((call_function_id < function_id) && "call to function not yet emitted");
-					emit_call_stub(function_id);
+			int n_args = 0;
+			for (int input_index = 0; input_index < n_inputs; input_index++) {
+				if (!bs32_test(input_set_bs32, input_index)) {
+					continue;
 				}
-
-				for (int input_index = 0; input_index < n_inputs; input_index++) {
-					if (!bs32_test(input_set_bs32, input_index)) {
-						continue;
-					}
-					int bytecode_top = zvm_arrlen(g.bytecode);
-					uint32_t reg = fn_trace(mod, *bufp(zvm__arg_index(step->p, input_index)));
-					if (pass == 1) {
-						zvm_assert((bytecode_top == zvm_arrlen(g.bytecode)) && "did not expect bytecode to mutate");
-						emit_call_arg(reg);
-					}
-				}
+				uint32_t src_reg = fn_trace(&ft, *bufp(zvm__arg_index(step->p, input_index)));
+				uint32_t arg_reg = reg_base + n_retvals + (n_args++);
+				emit3(OP(MOVE), arg_reg, src_reg);
 			}
 
-			// TODO ... I uh... have to... uh... this relates to
-			// packing and unpacking :) or uh...
+			uint32_t pc = g.functions[function_id].bytecode_i;
+			if (stateful_call) {
+				uint32_t state_offset = 0; // XXX how to calculate?
+				emit4(OP(STATEFUL_CALL), pc, reg_base, state_offset);
+			} else {
+				emit3(OP(STATELESS_CALL), pc, reg_base);
+			}
+
+			// return values are considered "live", and are sort of
+			// retroactively allocated here (argument values are
+			// considered "lost" and thrown away because the
+			// function is allowed to reuse/overwrite them)
+			fn_tracer_hawk_registers(&ft, n_retvals);
 
 			bs32s_restore_len();
 		}
 	}
+
+	emit1(OP(RETURN));
+
+	fn->bytecode_n = zvm_arrlen(g.bytecode) - fn->bytecode_i;
 }
 
 static void emit_functions()
