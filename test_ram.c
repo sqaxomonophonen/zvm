@@ -172,6 +172,33 @@ static uint32_t emit_ram16(int address_bus_size, uint32_t ram_module_id)
 	return zvm_end_module();
 }
 
+int retvals[100];
+int arguments[100];
+
+static void ram_op(int we, int re, int d, int a)
+{
+	arguments[0] = we;
+	arguments[1] = re;
+	for (int i = 0; i < 8; i++) arguments[2+i] = !!(d & (1<<i));
+	for (int i = 0; i < 16; i++) arguments[10+i] = !!(a & (1<<i));
+	zvm_run(retvals, arguments);
+}
+
+static void ram_write(int address, int data)
+{
+	ram_op(1,0,data,address);
+}
+
+static int ram_read(int address)
+{
+	ram_op(0,1,0,address);
+	int r = 0;
+	for (int i = 0; i < 8; i++) {
+		r |= retvals[i] << i;
+	}
+	return r;
+}
+
 int main(int argc, char** argv)
 {
 	zvm_init();
@@ -203,10 +230,12 @@ int main(int argc, char** argv)
 	printf("\n");
 	#undef MOD
 
-	zvm_end_program(module_id_ram64k);
+	zvm_end_program(module_id_ram4k);
 
 	printf("\n");
-	zvm_run(NULL, NULL);
+
+	ram_write(42, 69);
+	printf("read %d\n", ram_read(42));
 
 	return EXIT_SUCCESS;
 }
