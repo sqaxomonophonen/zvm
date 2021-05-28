@@ -1546,10 +1546,13 @@ static void emit_function_stubs_rec(int substance_id)
 	for (int output_index = 0; output_index < n_outputs; output_index++) {
 		if (!outcome_request_output_test(sb->key.outcome_request_bs32i, output_index)) {
 			zvm_arrpush(g.u32s, ZVM_NIL);
-			continue;
+		} else {
+			bs32_union_inplace(n_inputs, input_set_bs32, get_output_input_dep_bs32(mod, output_index));
+			zvm_arrpush(g.u32s, n_retvals++);
 		}
-		bs32_union_inplace(n_inputs, input_set_bs32, get_output_input_dep_bs32(mod, output_index));
-		zvm_arrpush(g.u32s, n_retvals++);
+	}
+	if (outcome_request_state_test(sb->key.outcome_request_bs32i)) {
+		bs32_union_inplace(n_inputs, input_set_bs32, get_state_input_dep_bs32(mod));
 	}
 
 	int n_arguments = 0;
@@ -1557,9 +1560,9 @@ static void emit_function_stubs_rec(int substance_id)
 	for (int input_index = 0; input_index < n_inputs; input_index++) {
 		if (!bs32_test(input_set_bs32, input_index)) {
 			zvm_arrpush(g.u32s, ZVM_NIL);
-			continue;
+		} else {
+			zvm_arrpush(g.u32s, n_arguments++);
 		}
-		zvm_arrpush(g.u32s, n_arguments++);
 	}
 
 	bs32s_restore_len();
@@ -1689,11 +1692,6 @@ static uint32_t resolve_function_id_for_substance_id(uint32_t substance_id)
 	zvm_assert(!"substance id not found");
 }
 
-struct fn_tracer {
-	struct function* fn;
-	uint32_t next_register;
-};
-
 static struct module* get_substance_mod(struct substance* sb)
 {
 	return &g.modules[sb->key.module_id];
@@ -1732,6 +1730,11 @@ static int get_function_argument_register_for_input(struct function* fn, int inp
 {
 	return fn->n_retvals + get_function_argument_index_for_input(fn, input_index);
 }
+
+struct fn_tracer {
+	struct function* fn;
+	uint32_t next_register;
+};
 
 static void fn_tracer_init(struct fn_tracer* ft, struct function* fn)
 {
@@ -2020,36 +2023,19 @@ static void disasm_function_id(int function_id)
 
 		printf("(");
 		switch (op) {
-		case OP(STATEFUL_CALL):
-			printf("pc=%.6x, regbase=%d, stbase=%d", args[0], args[1], args[2]);
-			break;
-		case OP(STATELESS_CALL):
-			printf("pc=%.6x, regbase=%d", args[0], args[1]);
-			break;
-		case OP(RETURN):
-			break;
-		case OP(A21):
-			printf("dst=r%d, src0=r%d, src1=r%d", args[0], args[1], args[2]);
-			break;
-		case OP(A11):
-			printf("dst=r%d, src=r%d", args[0], args[1]);
-			break;
-		case OP(MOVE):
-			printf("dst=r%d, src=r%d", args[0], args[1]);
-			break;
-		case OP(WRITE):
-			printf("st=%d, src=r%d", args[0], args[1]);
-			break;
-		case OP(READ):
-			printf("dst=r%d, st=%d", args[0], args[1]);
-			break;
-		case OP(LOADIMM):
-			printf("dst=r%d, imm=%d", args[0], args[1]);
-			break;
+		case OP(STATEFUL_CALL): printf("pc=%.6x, regbase=%d, stbase=%d", args[0], args[1], args[2]); break;
+		case OP(STATELESS_CALL): printf("pc=%.6x, regbase=%d", args[0], args[1]); break;
+		case OP(RETURN): break;
+		case OP(A21): printf("dst=r%d, src0=r%d, src1=r%d", args[0], args[1], args[2]); break;
+		case OP(A11): printf("dst=r%d, src=r%d", args[0], args[1]); break;
+		case OP(MOVE): printf("dst=r%d, src=r%d", args[0], args[1]); break;
+		case OP(WRITE): printf("st=%d, src=r%d", args[0], args[1]); break;
+		case OP(READ): printf("dst=r%d, st=%d", args[0], args[1]); break;
+		case OP(LOADIMM): printf("dst=r%d, imm=%d", args[0], args[1]); break;
 		default: zvm_assert(!"unhandled op");
 		}
-		printf(")");
 
+		printf(")");
 		printf("\n");
 
 		pc += len;
