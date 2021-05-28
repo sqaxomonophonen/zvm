@@ -119,7 +119,7 @@ void zvm_end_program(uint32_t main_module_id);
 int zvm_begin_module(int n_inputs, int n_outputs);
 int zvm_end_module();
 
-void zvm_run(uint32_t* arguments, uint32_t* retvals);
+void zvm_run(int* arguments, int* retvals);
 
 static inline uint32_t zvm_1x(uint32_t x0)
 {

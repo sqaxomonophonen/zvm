@@ -76,25 +76,15 @@ struct function {
 };
 
 struct call_stack_entry {
-	uint32_t pc;
-	uint32_t save_register_stack_top;
-	uint32_t save_state_offset;
+	int pc;
+	int reg0;
+	int state_offset;
 };
 
 struct machine {
-	uint32_t* register_stack;
-	int register_stack_top;
-
+	int* registers;
 	struct call_stack_entry* call_stack;
 	int call_stack_top;
-
-	uint32_t* state_offset;
-
-	uint32_t* call_arguments;
-	uint32_t* call_retvals;
-	uint32_t call_function_id;
-
-	/* XXX something like this? */
 };
 
 struct globals {
@@ -1724,14 +1714,24 @@ static int get_function_argument_index_for_input(struct function* fn, int input_
 	return i;
 }
 
+static inline int get_function_retval_index(struct function* fn, int index)
+{
+	return index;
+}
+
+static inline int get_function_argument_index(struct function* fn, int index)
+{
+	return fn->n_retvals + index;
+}
+
 static int get_function_retval_register_for_output(struct function* fn, int output_index)
 {
-	return get_function_retval_index_for_output(fn, output_index);
+	return get_function_retval_index(fn, get_function_retval_index_for_output(fn, output_index));
 }
 
 static int get_function_argument_register_for_input(struct function* fn, int input_index)
 {
-	return fn->n_retvals + get_function_argument_index_for_input(fn, input_index);
+	return get_function_argument_index(fn, get_function_argument_index_for_input(fn, input_index));
 }
 
 struct fn_tracer {
@@ -2115,20 +2115,138 @@ void zvm_end_program(uint32_t main_module_id)
 	// TODO prep machine
 }
 
-#define REGISTER_STACK_SIZE (1<<16)
+#define N_REGISTERS (1<<16)
 #define CALL_STACK_SIZE (1<<8)
 
 static void machine_init()
 {
 	struct machine* m = &g.machine;
 
-	zvm_arrsetlen(m->register_stack, REGISTER_STACK_SIZE);
+	zvm_arrsetlen(m->registers, N_REGISTERS);
 	zvm_arrsetlen(m->call_stack, CALL_STACK_SIZE);
 }
 
-void zvm_run(uint32_t* arguments, uint32_t* retvals)
+static inline struct call_stack_entry* mtop()
 {
-	//struct function* main_function = &g.functions[g.main_function_id];
+	struct machine* m = &g.machine;
+	return &m->call_stack[m->call_stack_top];
+}
+
+static void mpush(struct call_stack_entry e)
+{
+	// XXX do relative/incremental? like add call_stack_entry to previous entry?
+	struct machine* m = &g.machine;
+	memcpy(&m->call_stack[++m->call_stack_top], &e, sizeof e);
+}
+
+static int mpop()
+{
+	g.machine.call_stack_top--;
+	return g.machine.call_stack_top;
+}
+
+static inline int reg_read(int index)
+{
+	return !!g.machine.registers[mtop()->reg0 + index];
+}
+
+static inline void reg_write(int index, int value)
+{
+	g.machine.registers[mtop()->reg0 + index] = !!value;
+}
+
+static void exec_a21(int aop, uint32_t dst_reg, uint32_t src0_reg, uint32_t src1_reg)
+{
+	int a = reg_read(src0_reg);
+	int b = reg_read(src1_reg);
+	int r = 0;
+
+	switch (aop) {
+	case ZVM_A21_OP(NOR):
+		r = !(a || b);
+		break;
+	case ZVM_A21_OP(NAND):
+		r = !(a && b);
+		break;
+	case ZVM_A21_OP(OR):
+		r = a || b;
+		break;
+	case ZVM_A21_OP(AND):
+		r = a && b;
+		break;
+	case ZVM_A21_OP(XOR):
+		r = !!(a ^ b);
+		break;
+	default: zvm_assert(!"unhandled a21 op");
+	}
+
+	reg_write(dst_reg, r);
+}
+
+void zvm_run(int* arguments, int* retvals)
+{
+	struct function* main_function = &g.functions[g.main_function_id];
+
+	if (arguments != NULL) {
+		for (int i = 0; i < main_function->n_arguments; i++) {
+			reg_write(get_function_argument_index(main_function, i), arguments[i]);
+		}
+	}
+
+	uint32_t pc = main_function->bytecode_i;
+
+	//struct machine* machine = &g.machine;
+
+	int executing = 1;
+	while (executing) {
+		uint32_t bytecode = g.bytecode[pc];
+
+		uint32_t* arg = &g.bytecode[pc+1];
+
+		int op = ZVM_OP_DECODE_X(bytecode);
+
+		switch (op) {
+		case OP(STATEFUL_CALL):
+			zvm_assert(!"TODO");
+			break;
+		case OP(STATELESS_CALL):
+			zvm_assert(!"TODO");
+			break;
+		case OP(RETURN):
+			if (mpop() < 0) {
+				executing = 0;
+			}
+			break;
+		case OP(A21):
+			exec_a21(ZVM_OP_DECODE_Y(bytecode), arg[0], arg[1], arg[2]);
+			break;
+		case OP(A11):
+			zvm_assert(!"TODO");
+			break;
+		case OP(MOVE):
+			reg_write(arg[0], reg_read(arg[1]));
+			break;
+		case OP(WRITE):
+			zvm_assert(!"TODO");
+			break;
+		case OP(READ):
+			zvm_assert(!"TODO");
+			break;
+		case OP(LOADIMM):
+			zvm_assert(!"TODO");
+			break;
+		default:
+			zvm_assert(!"unhandled op");
+		}
+
+		pc += get_bytecode_op_length(bytecode);
+	}
+
+	if (retvals != NULL) {
+		for (int i = 0; i < main_function->n_retvals; i++) {
+			retvals[i] = reg_read(get_function_retval_index(main_function, i));
+		}
+	}
 }
 
 void zvm_init()
