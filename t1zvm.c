@@ -3,12 +3,12 @@
 
 #include "zvm.h"
 
-
 uint32_t module_id_and;
 uint32_t module_id_or;
 uint32_t module_id_not;
-uint32_t module_id_not;
+
 uint32_t module_id_decode4to16;
+
 uint32_t module_id_memory_bit;
 uint32_t module_id_memory_byte;
 uint32_t module_id_ram16;

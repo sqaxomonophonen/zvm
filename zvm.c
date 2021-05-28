@@ -2183,7 +2183,7 @@ static void exec_a21(int aop, uint32_t dst_reg, uint32_t src0_reg, uint32_t src1
 	reg_write(dst_reg, r);
 }
 
-void zvm_run(int* arguments, int* retvals)
+void zvm_run(int* retvals, int* arguments)
 {
 	struct function* main_function = &g.functions[g.main_function_id];
 
@@ -2214,6 +2214,7 @@ void zvm_run(int* arguments, int* retvals)
 			break;
 		case OP(RETURN):
 			if (mpop() < 0) {
+				g.machine.call_stack_top = 0; // gotcha ya stupid f!%$&
 				executing = 0;
 			}
 			break;
