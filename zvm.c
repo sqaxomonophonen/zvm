@@ -38,11 +38,6 @@ struct unit_delay_index {
 	uint32_t index;
 };
 
-struct node_output {
-	uint32_t p;
-	uint32_t index;
-};
-
 struct output {
 	uint32_t p;
 };
@@ -87,7 +82,7 @@ struct function {
 
 struct globals {
 	struct module* modules;
-	struct node_output* node_outputs;
+	struct zvm_pi* node_outputs;
 	uint32_t* node_output_maps;
 	struct substance_keyval* substance_keyvals;
 	struct substance* substances;
@@ -361,14 +356,14 @@ static uint32_t* get_output_input_dep_bs32(struct module* mod, int output_index)
 
 static uint32_t* get_outcome_index_input_dep_bs32(struct module* mod, uint32_t outcome_index)
 {
-	if (outcome_index == ZVM_NIL_ID) {
+	if (outcome_index == ZVM_NIL) {
 		return get_state_input_dep_bs32(mod);
 	} else {
 		return get_output_input_dep_bs32(mod, outcome_index);
 	}
 }
 
-static inline int get_op_n_args(uint32_t code)
+static inline int get_op_n_inputs(uint32_t code)
 {
 	const int op = ZVM_OP_DECODE_X(code);
 	if (op == ZVM_OP(INSTANCE)) {
@@ -385,13 +380,13 @@ static inline int get_op_n_args(uint32_t code)
 #if 0
 static inline int zvm__is_valid_arg_index(uint32_t x, int index)
 {
-	return 0 <= index && index < get_op_n_args(zvm__buf[x]);
+	return 0 <= index && index < get_op_n_inputs(zvm__buf[x]);
 }
 #endif
 
 static int get_op_length(uint32_t p)
 {
-	return 1+get_op_n_args(*bufp(p));
+	return 1+get_op_n_inputs(*bufp(p));
 }
 
 static int get_op_n_outputs(uint32_t p)
@@ -405,23 +400,23 @@ static int get_op_n_outputs(uint32_t p)
 	return 1;
 }
 
-static int nodecmp(const void* va, const void* vb)
+static int picmp(const void* va, const void* vb)
 {
-	const struct node_output* a = va;
-	const struct node_output* b = vb;
+	const struct zvm_pi* a = va;
+	const struct zvm_pi* b = vb;
 	int c0 = u32cmp(a->p, b->p);
 	if (c0 != 0) return c0;
-	return u32cmp(a->index, b->index);
+	return u32cmp(a->i, b->i);
 }
 
-static int get_node_index(struct module* mod, struct node_output* k)
+static int get_node_index(struct module* mod, struct zvm_pi k)
 {
-	struct node_output* nodes = &g.node_outputs[mod->node_outputs_i];
+	struct zvm_pi* nodes = &g.node_outputs[mod->node_outputs_i];
 	int left = 0;
 	int right = mod->n_node_outputs - 1;
 	while (left <= right) {
 		int mid = (left+right) >> 1;
-		int cmp = nodecmp(&nodes[mid], k);
+		int cmp = picmp(&nodes[mid], &k);
 		if (cmp < 0) {
 			left = mid + 1;
 		} else if (cmp > 0) {
@@ -445,9 +440,9 @@ static void clear_node_visit_set(struct module* mod)
 	bs32_clear_all(mod->n_node_outputs, get_node_output_bs32(mod));
 }
 
-static int visit_node(struct module* mod, uint32_t p, uint32_t output_index)
+static int visit_node(struct module* mod, struct zvm_pi pi)
 {
-	int node_index = get_node_index(mod, &((struct node_output) { .p = p, .index = output_index}));
+	int node_index = get_node_index(mod, pi);
 	uint32_t* node_bs32 = bs32p(mod->node_output_bs32i);
 	if (bs32_test(node_bs32, node_index)) {
 		return 0;
@@ -462,79 +457,54 @@ struct tracer {
 	uint32_t substance_id;
 
 	void(*module_input_visitor)(struct tracer*, uint32_t p);
-	void(*instance_output_visitor)(struct tracer*, uint32_t p, int output_index);
+	void(*instance_output_visitor)(struct tracer*, struct zvm_pi pi);
 
 	int break_at_instance;
 
 	void* usr;
 };
 
-static void trace(struct tracer* tr, uint32_t p)
+static inline struct zvm_pi argpi(uint32_t p, int argument_index)
 {
-	int unpack_index = -1;
+	uint32_t* xs = bufp(zvm__arg_index(p, argument_index));
+	return zvm_pi(xs[0], xs[1]);
+}
 
-	for (;;) {
-		if (ZVM_IS_SPECIALX(p, ZVM_X_CONST)) {
-			zvm_assert(unpack_index == -1);
-			return;
+static void trace(struct tracer* tr, struct zvm_pi pi)
+{
+	zvm_assert((tr->mod->code_begin_p <= pi.p && pi.p < tr->mod->code_end_p) && "p out of range");
+
+	if (!visit_node(tr->mod, pi)) {
+		return;
+	}
+
+	uint32_t code = *bufp(pi.p);
+
+	const int op = ZVM_OP_DECODE_X(code);
+	if (op == ZVM_OP(INPUT)) {
+		if (tr->module_input_visitor != NULL) {
+			tr->module_input_visitor(tr, pi.p);
+		}
+	} else if (op == ZVM_OP(INSTANCE)) {
+		struct module* instance_mod = get_instance_mod_for_code(code);
+
+		if (tr->instance_output_visitor != NULL) {
+			tr->instance_output_visitor(tr, pi);
 		}
 
-		if (ZVM_IS_SPECIALX(p, ZVM_X_INPUT)) {
-			zvm_assert(unpack_index == -1);
-			if (tr->module_input_visitor != NULL) {
-				tr->module_input_visitor(tr, p);
-			}
-			return;
-		}
-
-		assert(!ZVM_IS_SPECIAL(p));
-
-		zvm_assert((tr->mod->code_begin_p <= p && p < tr->mod->code_end_p) && "p out of range");
-
-		int output_index = unpack_index >= 0 ? unpack_index : 0;
-
-		if (!visit_node(tr->mod, p, output_index)) {
-			return;
-		}
-
-		uint32_t code = *bufp(p);
-
-		const int op = ZVM_OP_DECODE_X(code);
-		if (op == ZVM_OP(INSTANCE)) {
-			struct module* instance_mod = get_instance_mod_for_code(code);
-			if (instance_mod->n_outputs == 1 && unpack_index == -1) unpack_index = 0;
-			zvm_assert(0 <= unpack_index && unpack_index < instance_mod->n_outputs && "expected valid unpack");
-
-			if (tr->instance_output_visitor != NULL) {
-				tr->instance_output_visitor(tr, p, unpack_index);
-			}
-
-			if (!tr->break_at_instance) {
-				for (int i = 0; i < instance_mod->n_inputs; i++) {
-					if (bs32_test(get_output_input_dep_bs32(instance_mod, unpack_index), i)) {
-						trace(tr, *bufp(zvm__arg_index(p, i)));
-					}
+		if (!tr->break_at_instance) {
+			for (int input = 0; input < instance_mod->n_inputs; input++) {
+				if (bs32_test(get_output_input_dep_bs32(instance_mod, pi.i), input)) {
+					trace(tr, argpi(pi.p, input));
 				}
 			}
-
-			return;
 		}
-
-		zvm_assert(unpack_index == -1 && "unexpected unpack");
-
-		if (op == ZVM_OP(UNPACK)) {
-			unpack_index = ZVM_OP_DECODE_Y(code);
-			p = *bufp(zvm__arg_index(p, 0));
-			continue;
-		} else if (op == ZVM_OP(UNIT_DELAY)) {
-			// unit delays have no dependencies
-			return;
-		} else {
-			int n_args = get_op_n_args(code);
-			for (int i = 0; i < n_args; i++) {
-				trace(tr, *bufp(zvm__arg_index(p, i)));
-			}
-			return;
+	} else if (op == ZVM_OP(UNIT_DELAY)) {
+		// unit delays have no dependencies
+	} else {
+		const int n_inputs = get_op_n_inputs(code);
+		for (int input = 0; input < n_inputs; input++) {
+			trace(tr, argpi(pi.p, input));
 		}
 	}
 }
@@ -606,7 +576,7 @@ int zvm_end_module()
 		o->p = ZVM_PLACEHOLDER;
 	}
 
-	struct node_output* np = NULL;
+	struct zvm_pi* np = NULL;
 
 	mod->unit_delay_index_map_i = zvm_arrlen(g.unit_delay_index_maps);
 
@@ -699,12 +669,12 @@ int zvm_end_module()
 	return module_id;
 }
 
-static uint32_t node_output_map_get(struct module* mod, struct node_output* k)
+static uint32_t node_output_map_get(struct module* mod, struct zvm_pi k)
 {
 	return g.node_output_maps[mod->node_output_map_i + get_node_index(mod, k)];
 }
 
-static void node_output_map_set(struct module* mod, struct node_output* k, uint32_t value)
+static void node_output_map_set(struct module* mod, struct zvm_pi k, uint32_t value)
 {
 	g.node_output_maps[mod->node_output_map_i + get_node_index(mod, k)] = value;
 }
@@ -1131,14 +1101,14 @@ static void process_substance(uint32_t substance_id)
 			if (!bs32_test(node_bs32, i)) {
 				continue;
 			}
-			struct node_output* node_output = &g.node_outputs[mod->node_outputs_i + i];
+			struct zvm_pi* node_output = &g.node_outputs[mod->node_outputs_i + i];
 			uint32_t code = *bufp(node_output->p);
 			const int op = ZVM_OP_DECODE_X(code);
 			if (op != ZVM_OP(INSTANCE)) {
 				continue;
 			}
 
-			push_outcome(node_output->p, node_output->index);
+			push_outcome(node_output->p, node_output->i);
 		}
 
 		if (outcome_request_state_test(key.outcome_request_bs32i)) {
