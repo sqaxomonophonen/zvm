@@ -2129,6 +2129,9 @@ static void machine_init()
 
 	zvm_arrsetlen(m->registers, N_REGISTERS);
 	zvm_arrsetlen(m->call_stack, CALL_STACK_SIZE);
+
+	memset(m->registers, 0, N_REGISTERS * sizeof(*m->registers));
+	memset(m->call_stack, 0, CALL_STACK_SIZE * sizeof(*m->call_stack));
 }
 
 static inline struct call_stack_entry* mtop()
