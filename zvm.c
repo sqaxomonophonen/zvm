@@ -1862,6 +1862,30 @@ static const char* get_bytecode_op_name(uint32_t bytecode)
 	return NULL;
 }
 
+static const char* get_a21_name(uint32_t code)
+{
+	uint32_t aop = ZVM_OP_DECODE_Y(code);
+	switch (aop) {
+		#define ZOP(op) case ZVM_A21_OP(op): return #op;
+		ZVM_A21_OPS
+		#undef ZOP
+	}
+	zvm_assert(!"unhandled a21 op");
+	return NULL;
+}
+
+static const char* get_a11_name(uint32_t code)
+{
+	uint32_t aop = ZVM_OP_DECODE_Y(code);
+	switch (aop) {
+		#define ZOP(op) case ZVM_A11_OP(op): return #op;
+		ZVM_A11_OPS
+		#undef ZOP
+	}
+	zvm_assert(!"unhandled a11 op");
+	return NULL;
+}
+
 static void disasm_function_id(int function_id)
 {
 	struct function* fn = &g.functions[function_id];
@@ -1892,6 +1916,12 @@ static void disasm_function_id(int function_id)
 		uint32_t* args = &g.bytecode[pc+1];
 
 		printf("%s", get_bytecode_op_name(bytecode));
+		if (op == OP(A21)) {
+			printf(":%s", get_a21_name(bytecode));
+		} else if (op == OP(A11)) {
+			printf(":%s", get_a11_name(bytecode));
+		}
+
 		printf("(");
 		switch (op) {
 		case OP(STATEFUL_CALL):
