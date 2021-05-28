@@ -15,8 +15,8 @@ struct module {
 	// they're not, e.g. for platform semi-independent optimizations like
 	// "integer SIMD", or floating point stuff
 
-	uint32_t code_begin_p;
-	uint32_t code_end_p;
+	uint32_t nodecode_begin_p;
+	uint32_t nodecode_end_p;
 
 	uint32_t input_bs32i;
 
@@ -143,11 +143,11 @@ static inline int module_has_state(struct module* mod)
 	return mod->n_bits > 0;
 }
 
-static struct module* get_instance_mod_for_code(uint32_t code)
+static struct module* get_instance_mod_for_nodecode(uint32_t nodecode)
 {
-	const int op = ZVM_OP_DECODE_X(code);
+	const int op = ZVM_OP_DECODE_X(nodecode);
 	zvm_assert(op == ZVM_OP(INSTANCE) && "expected op to be an instance");
-	const int instance_module_id = ZVM_OP_DECODE_Y(code);
+	const int instance_module_id = ZVM_OP_DECODE_Y(nodecode);
 	zvm_assert(is_valid_module_id(instance_module_id));
 	return &g.modules[instance_module_id];
 }
@@ -155,7 +155,7 @@ static struct module* get_instance_mod_for_code(uint32_t code)
 
 static struct module* get_instance_mod_at_p(uint32_t p)
 {
-	return get_instance_mod_for_code(*bufp(p));
+	return get_instance_mod_for_nodecode(*bufp(p));
 }
 
 void zvm_init()
@@ -175,7 +175,7 @@ int zvm_begin_module(int n_inputs, int n_outputs)
 	struct module m = {0};
 	m.n_inputs = n_inputs;
 	m.n_outputs = n_outputs;
-	m.code_begin_p = buftop();
+	m.nodecode_begin_p = buftop();
 	zvm_arrpush(g.modules, m);
 
 	return id;
@@ -354,11 +354,11 @@ static uint32_t* get_outcome_index_input_dep_bs32(struct module* mod, uint32_t o
 	}
 }
 
-static inline int get_op_n_inputs(uint32_t code)
+static inline int get_op_n_inputs(uint32_t nodecode)
 {
-	const int op = ZVM_OP_DECODE_X(code);
+	const int op = ZVM_OP_DECODE_X(nodecode);
 	if (op == ZVM_OP(INSTANCE)) {
-		return get_instance_mod_for_code(code)->n_inputs;
+		return get_instance_mod_for_nodecode(nodecode)->n_inputs;
 	}
 	switch (op) {
 	#define ZOP(op,narg) case ZVM_OP(op): zvm_assert(narg >= 0); return narg;
@@ -382,10 +382,10 @@ static int get_op_length(uint32_t p)
 
 static int get_op_n_outputs(uint32_t p)
 {
-	uint32_t code = *bufp(p);
-	const int op = ZVM_OP_DECODE_X(code);
+	uint32_t nodecode = *bufp(p);
+	const int op = ZVM_OP_DECODE_X(nodecode);
 	if (op == ZVM_OP(INSTANCE)) {
-		return get_instance_mod_for_code(code)->n_outputs;
+		return get_instance_mod_for_nodecode(nodecode)->n_outputs;
 	}
 
 	return 1;
@@ -463,21 +463,21 @@ static inline struct zvm_pi argpi(uint32_t p, int argument_index)
 
 static void trace(struct tracer* tr, struct zvm_pi pi)
 {
-	zvm_assert((tr->mod->code_begin_p <= pi.p && pi.p < tr->mod->code_end_p) && "p out of range");
+	zvm_assert((tr->mod->nodecode_begin_p <= pi.p && pi.p < tr->mod->nodecode_end_p) && "p out of range");
 
 	if (!visit_node(tr->mod, pi)) {
 		return;
 	}
 
-	uint32_t code = *bufp(pi.p);
+	uint32_t nodecode = *bufp(pi.p);
 
-	const int op = ZVM_OP_DECODE_X(code);
+	const int op = ZVM_OP_DECODE_X(nodecode);
 	if (op == ZVM_OP(INPUT)) {
 		if (tr->module_input_visitor != NULL) {
 			tr->module_input_visitor(tr, pi.p);
 		}
 	} else if (op == ZVM_OP(INSTANCE)) {
-		struct module* instance_mod = get_instance_mod_for_code(code);
+		struct module* instance_mod = get_instance_mod_for_nodecode(nodecode);
 
 		if (tr->instance_output_visitor != NULL) {
 			tr->instance_output_visitor(tr, pi);
@@ -493,7 +493,7 @@ static void trace(struct tracer* tr, struct zvm_pi pi)
 	} else if (op == ZVM_OP(UNIT_DELAY)) {
 		// unit delays have no dependencies
 	} else {
-		const int n_inputs = get_op_n_inputs(code);
+		const int n_inputs = get_op_n_inputs(nodecode);
 		for (int input = 0; input < n_inputs; input++) {
 			trace(tr, argpi(pi.p, input));
 		}
@@ -526,15 +526,15 @@ static void trace_state_deps(uint32_t* input_bs32, struct module* mod)
 {
 	clear_node_visit_set(mod);
 
-	uint32_t p = mod->code_begin_p;
-	const uint32_t p_end = mod->code_end_p;
+	uint32_t p = mod->nodecode_begin_p;
+	const uint32_t p_end = mod->nodecode_end_p;
 	while (p < p_end) {
-		uint32_t code = *bufp(p);
-		const int op = ZVM_OP_DECODE_X(code);
+		uint32_t nodecode = *bufp(p);
+		const int op = ZVM_OP_DECODE_X(nodecode);
 		if (op == ZVM_OP(UNIT_DELAY)) {
 			trace_inputs_rec(mod, input_bs32, argpi(p,0));
 		} else if (op == ZVM_OP(INSTANCE)) {
-			struct module* instance_mod = get_instance_mod_for_code(code);
+			struct module* instance_mod = get_instance_mod_for_nodecode(nodecode);
 			uint32_t* ibs = get_state_input_dep_bs32(instance_mod);
 			int n_inputs = instance_mod->n_inputs;
 			for (int i = 0; i < n_inputs; i++) {
@@ -562,7 +562,7 @@ int zvm_end_module()
 {
 	struct module* mod = ZVM_MOD;
 
-	mod->code_end_p = buftop();
+	mod->nodecode_end_p = buftop();
 
 	struct zvm_pi* outputs = zvm_arradd(g.outputs, mod->n_outputs);
 	mod->outputs_i = outputs - g.outputs;
@@ -579,18 +579,18 @@ int zvm_end_module()
 	for (int pass = 0; pass < 2; pass++) {
 		int n_nodes_total = 0;
 
-		uint32_t p = mod->code_begin_p;
-		const uint32_t p_end = mod->code_end_p;
+		uint32_t p = mod->nodecode_begin_p;
+		const uint32_t p_end = mod->nodecode_end_p;
 		while (p < p_end) {
 			int n_node_outputs = get_op_n_outputs(p);
 
 			// setup outputs and n_bits
 			if (pass == 0) {
-				uint32_t code = *bufp(p);
-				const int op = ZVM_OP_DECODE_X(code);
+				uint32_t nodecode = *bufp(p);
+				const int op = ZVM_OP_DECODE_X(nodecode);
 
 				if (op == ZVM_OP(OUTPUT)) {
-					int output_index = ZVM_OP_DECODE_Y(code);
+					int output_index = ZVM_OP_DECODE_Y(nodecode);
 					zvm_assert(0 <= output_index && output_index < mod->n_outputs);
 					struct zvm_pi* output = &g.outputs[mod->outputs_i + output_index];
 					zvm_assert(is_pi_placeholder(*output) && "double assignment");
@@ -599,7 +599,7 @@ int zvm_end_module()
 					mod->n_bits++;
 					zvm_arrpush(g.state_index_maps, zvm_pi(p, next_state_index++));
 				} else if (op == ZVM_OP(INSTANCE)) {
-					struct module* instance_mod = get_instance_mod_for_code(code);
+					struct module* instance_mod = get_instance_mod_for_nodecode(nodecode);
 					mod->n_bits += instance_mod->n_bits;
 					if (instance_mod->n_bits > 0) {
 						zvm_arrpush(g.state_index_maps, zvm_pi(p, next_state_index));
@@ -957,9 +957,9 @@ static int ack_substance(uint32_t p, uint32_t queue_i, int n, int* queue_np, int
 {
 	bs32s_save_len();
 
-	uint32_t code = *bufp(p);
+	uint32_t nodecode = *bufp(p);
 
-	int instance_module_id = ZVM_OP_DECODE_Y(code);
+	int instance_module_id = ZVM_OP_DECODE_Y(nodecode);
 	zvm_assert(is_valid_module_id(instance_module_id));
 
 	struct module* instance_mod = &g.modules[instance_module_id];
@@ -1033,15 +1033,15 @@ static void process_substance(uint32_t substance_id)
 		}
 
 		if (outcome_request_state_test(key.outcome_request_bs32i)) {
-			uint32_t p = mod->code_begin_p;
-			const uint32_t p_end = mod->code_end_p;
+			uint32_t p = mod->nodecode_begin_p;
+			const uint32_t p_end = mod->nodecode_end_p;
 			while (p < p_end) {
-				uint32_t code = *bufp(p);
-				const int op = ZVM_OP_DECODE_X(code);
+				uint32_t nodecode = *bufp(p);
+				const int op = ZVM_OP_DECODE_X(nodecode);
 				if (op == ZVM_OP(UNIT_DELAY)) {
 					add_drain(substance_id, p, 0);
 				} else if (op == ZVM_OP(INSTANCE)) {
-					struct module* instance_mod = get_instance_mod_for_code(code);
+					struct module* instance_mod = get_instance_mod_for_nodecode(nodecode);
 					if (module_has_state(instance_mod)) {
 						int n_inputs = instance_mod->n_inputs;
 						uint32_t* ibs = get_state_input_dep_bs32(instance_mod);
@@ -1100,8 +1100,8 @@ static void process_substance(uint32_t substance_id)
 				continue;
 			}
 			struct zvm_pi* node_output = &g.node_outputs[mod->node_outputs_i + i];
-			uint32_t code = *bufp(node_output->p);
-			const int op = ZVM_OP_DECODE_X(code);
+			uint32_t nodecode = *bufp(node_output->p);
+			const int op = ZVM_OP_DECODE_X(nodecode);
 			if (op != ZVM_OP(INSTANCE)) {
 				continue;
 			}
@@ -1111,13 +1111,13 @@ static void process_substance(uint32_t substance_id)
 
 		if (outcome_request_state_test(key.outcome_request_bs32i)) {
 			// add state outcome requests
-			uint32_t p = mod->code_begin_p;
-			const uint32_t p_end = mod->code_end_p;
+			uint32_t p = mod->nodecode_begin_p;
+			const uint32_t p_end = mod->nodecode_end_p;
 			while (p < p_end) {
-				uint32_t code = *bufp(p);
-				const int op = ZVM_OP_DECODE_X(code);
+				uint32_t nodecode = *bufp(p);
+				const int op = ZVM_OP_DECODE_X(nodecode);
 				if (op == ZVM_OP(INSTANCE)) {
-					if (module_has_state(get_instance_mod_for_code(code))) {
+					if (module_has_state(get_instance_mod_for_nodecode(nodecode))) {
 						push_outcome(p, ZVM_NIL);
 					}
 				}
@@ -1459,8 +1459,8 @@ static void process_substance(uint32_t substance_id)
 			struct drout* drain = &g.tmp_drains[v];
 			uint32_t p = drain->p;
 			if (p != ZVM_NIL) {
-				uint32_t code = *bufp(p);
-				const int op = ZVM_OP_DECODE_X(code);
+				uint32_t nodecode = *bufp(p);
+				const int op = ZVM_OP_DECODE_X(nodecode);
 				if (op == ZVM_OP(UNIT_DELAY)) {
 					push_step(p, ZVM_NIL);
 				}
@@ -1670,19 +1670,19 @@ static void fn_tracer_hawk_registers(struct fn_tracer* ft, int n)
 
 static uint32_t fn_trace_rec(struct fn_tracer* ft, struct zvm_pi pi)
 {
-	zvm_assert((ft->mod->code_begin_p <= pi.p && pi.p < ft->mod->code_end_p) && "p out of range");
+	zvm_assert((ft->mod->nodecode_begin_p <= pi.p && pi.p < ft->mod->nodecode_end_p) && "p out of range");
 
 	uint32_t stored_reg = node_output_map_get(ft->mod, pi);
 	if (stored_reg != ZVM_NIL) {
 		return stored_reg;
 	}
 
-	uint32_t code = *bufp(pi.p);
-	const int op = ZVM_OP_DECODE_X(code);
+	uint32_t nodecode = *bufp(pi.p);
+	const int op = ZVM_OP_DECODE_X(nodecode);
 
 	if (op == ZVM_OP(CONST)) {
 		uint32_t dst = fn_tracer_alloc_register(ft);
-		emit3(OP(LOADIMM), dst, ZVM_OP_DECODE_Y(code));
+		emit3(OP(LOADIMM), dst, ZVM_OP_DECODE_Y(nodecode));
 		return dst;
 	} else if (op == ZVM_OP(INPUT)) {
 		return 0; // XXX I need to lookup the argument register...
@@ -1690,12 +1690,12 @@ static uint32_t fn_trace_rec(struct fn_tracer* ft, struct zvm_pi pi)
 		uint32_t src0_reg = fn_trace_rec(ft, argpi(pi.p, 0));
 		uint32_t src1_reg = fn_trace_rec(ft, argpi(pi.p, 1));
 		uint32_t dst_reg = fn_tracer_alloc_register(ft);
-		emit4(code, dst_reg, src0_reg, src1_reg); // assuming same encoding for arithmetic ops
+		emit4(nodecode, dst_reg, src0_reg, src1_reg); // assuming same encoding for arithmetic ops
 		return dst_reg;
 	} else if (op == ZVM_OP(A11)) {
 		uint32_t src_reg = fn_trace_rec(ft, argpi(pi.p, 0));
 		uint32_t dst_reg = fn_tracer_alloc_register(ft);
-		emit3(code, dst_reg, src_reg); // assuming same encoding for arithmetic ops
+		emit3(nodecode, dst_reg, src_reg); // assuming same encoding for arithmetic ops
 		return dst_reg;
 	} else if (op == ZVM_OP(UNIT_DELAY)) {
 		uint32_t dst_reg = fn_tracer_alloc_register(ft);
@@ -1716,7 +1716,7 @@ static uint32_t fn_trace(struct fn_tracer* ft, struct zvm_pi pi)
 	return fn_trace_rec(ft, pi);
 }
 
-static void emit_function_code(uint32_t function_id)
+static void emit_function_bytecode(uint32_t function_id)
 {
 	struct function* fn = &g.functions[function_id];
 	fn->bytecode_i = zvm_arrlen(g.bytecode);
@@ -1817,7 +1817,7 @@ static void emit_functions()
 
 	const int n_functions = zvm_arrlen(g.functions);
 	for (int i = 0; i < n_functions; i++) {
-		emit_function_code(i);
+		emit_function_bytecode(i);
 	}
 
 	#if 0
@@ -1833,6 +1833,12 @@ static void emit_functions()
 	#endif
 }
 
+static void disasm()
+{
+	const int n_functions = zvm_arrlen(g.functions);
+	for (int i = 0; i < n_functions; i++) {
+	}
+}
 
 void zvm_end_program(uint32_t main_module_id)
 {
@@ -1880,5 +1886,9 @@ void zvm_end_program(uint32_t main_module_id)
 	printf("input sz:        %d\n", buftop());
 	printf("bytecode sz:     %d\n", zvm_arrlen(g.bytecode));
 	printf("=======================================\n");
+	#endif
+
+	#ifdef VERBOSE_DEBUG
+	disasm();
 	#endif
 }
