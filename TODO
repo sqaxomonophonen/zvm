@@ -1,7 +1,0 @@
-
-BUGS
-
- - t1zvm; "or" module; why does it calculate "x" (in emit_or()) twice?
-
- - t1zvm; "memory bit" module; it reads state twice, one of them AFTER the
-   read. why?

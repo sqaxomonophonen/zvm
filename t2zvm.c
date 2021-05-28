@@ -17,6 +17,9 @@ int main(int argc, char** argv)
 	zvm_init();
 	zvm_begin_program();
 	zvm_end_program(emit_and());
+
+	zvm_run(NULL, NULL);
+
 	return EXIT_SUCCESS;
 }
 

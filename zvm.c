@@ -75,6 +75,28 @@ struct function {
 	uint32_t input_argument_map_u32i;
 };
 
+struct call_stack_entry {
+	uint32_t pc;
+	uint32_t save_register_stack_top;
+	uint32_t save_state_offset;
+};
+
+struct machine {
+	uint32_t* register_stack;
+	int register_stack_top;
+
+	struct call_stack_entry* call_stack;
+	int call_stack_top;
+
+	uint32_t* state_offset;
+
+	uint32_t* call_arguments;
+	uint32_t* call_retvals;
+	uint32_t call_function_id;
+
+	/* XXX something like this? */
+};
+
 struct globals {
 	struct module* modules;
 	struct zvm_pi* node_outputs;
@@ -96,6 +118,8 @@ struct globals {
 
 	uint32_t main_module_id;
 	uint32_t main_substance_id;
+
+	struct machine machine;
 } g;
 
 static inline int is_valid_module_id(int module_id)
@@ -1753,6 +1777,7 @@ static void fn_tracer_hawk_registers(struct fn_tracer* ft, int n)
 	ft->next_register += n;
 }
 
+
 static uint32_t fn_trace_rec(struct fn_tracer* ft, struct zvm_pi pi)
 {
 	struct module* mod = get_function_mod(ft->fn);
@@ -1767,35 +1792,38 @@ static uint32_t fn_trace_rec(struct fn_tracer* ft, struct zvm_pi pi)
 	uint32_t nodecode = *bufp(pi.p);
 	const int op = ZVM_OP_DECODE_X(nodecode);
 
+	uint32_t reg;
+
 	if (op == ZVM_OP(CONST)) {
-		uint32_t dst = fn_tracer_alloc_register(ft);
-		emit3(OP(LOADIMM), dst, ZVM_OP_DECODE_Y(nodecode));
-		return dst;
+		reg = fn_tracer_alloc_register(ft);
+		emit3(OP(LOADIMM), reg, ZVM_OP_DECODE_Y(nodecode));
 	} else if (op == ZVM_OP(INPUT)) {
-		return get_function_argument_register_for_input(ft->fn, ZVM_OP_DECODE_Y(nodecode));
+		reg = get_function_argument_register_for_input(ft->fn, ZVM_OP_DECODE_Y(nodecode));
 	} else if (op == ZVM_OP(A21)) {
 		uint32_t src0_reg = fn_trace_rec(ft, argpi(pi.p, 0));
 		uint32_t src1_reg = fn_trace_rec(ft, argpi(pi.p, 1));
-		uint32_t dst_reg = fn_tracer_alloc_register(ft);
-		emit4(ZVM_OP_ENCODE_XY(OP(A21), ZVM_OP_DECODE_Y(nodecode)), dst_reg, src0_reg, src1_reg);
-		return dst_reg;
+		reg = fn_tracer_alloc_register(ft);
+		emit4(ZVM_OP_ENCODE_XY(OP(A21), ZVM_OP_DECODE_Y(nodecode)), reg, src0_reg, src1_reg);
 	} else if (op == ZVM_OP(A11)) {
 		uint32_t src_reg = fn_trace_rec(ft, argpi(pi.p, 0));
-		uint32_t dst_reg = fn_tracer_alloc_register(ft);
-		emit3(ZVM_OP_ENCODE_XY(OP(A11), ZVM_OP_DECODE_Y(nodecode)), dst_reg, src_reg);
-		return dst_reg;
+		reg = fn_tracer_alloc_register(ft);
+		emit3(ZVM_OP_ENCODE_XY(OP(A11), ZVM_OP_DECODE_Y(nodecode)), reg, src_reg);
 	} else if (op == ZVM_OP(UNIT_DELAY)) {
-		uint32_t dst_reg = fn_tracer_alloc_register(ft);
-		emit3(OP(READ), dst_reg, get_state_index(mod, pi.p));
-		return dst_reg;
+		reg = fn_tracer_alloc_register(ft);
+		emit3(OP(READ), reg, get_state_index(mod, pi.p));
 	} else if (op == ZVM_OP(INSTANCE)) {
 		zvm_assert(!"expected instance node output to already be populated");
 	} else {
 		zvm_assert(!"unhandled op");
 	}
 
-	zvm_assert(!"unreachable");
-	return 0;
+	#ifdef DEBUG
+	zvm_assert((node_output_map_get(mod, pi) == ZVM_NIL) && "should not write node more than once");
+	#endif
+
+	node_output_map_set(mod, pi, reg);
+
+	return reg;
 }
 
 static uint32_t fn_trace(struct fn_tracer* ft, struct zvm_pi pi)
@@ -1991,7 +2019,7 @@ static void disasm_function_id(int function_id)
 	uint32_t bytecode_end = fn->bytecode_i + fn->bytecode_n;
 
 	printf("\n");
-	printf("; F%d:S%d:M%d //  n_args=%d  n_retvals=%d  //  range %.6x - %.6x\n",
+	printf("; func F%d:S%d:M%d // n_args=%d  n_retvals=%d // range %.6x - %.6x\n",
 		function_id, fn->substance_id, g.substances[fn->substance_id].key.module_id,
 		fn->n_arguments, fn->n_retvals,
 		fn->bytecode_i, bytecode_end-1);
@@ -2104,4 +2132,9 @@ void zvm_end_program(uint32_t main_module_id)
 	#ifdef VERBOSE_DEBUG
 	disasm();
 	#endif
+}
+
+void zvm_run(uint32_t* arguments, uint32_t* retvals)
+{
+	// TODO
 }
