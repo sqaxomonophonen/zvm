@@ -53,18 +53,19 @@ static struct zvm_pi op_or(struct zvm_pi x0, struct zvm_pi x1)
 	return mod2(module_id_or, x0, x1);
 }
 
+int retvals[100];
+int arguments[100];
+
 int main(int argc, char** argv)
 {
 	zvm_init();
+
 
 	// TEST NOT
 	{
 		zvm_begin_program();
 		emit_functions();
 		zvm_end_program(module_id_not);
-
-		int retvals[100];
-		int arguments[100];
 
 		for (int input = 0; input <= 1; input++) {
 			arguments[0] = input;
@@ -80,9 +81,6 @@ int main(int argc, char** argv)
 		emit_functions();
 		zvm_end_program(module_id_and);
 
-		int retvals[100];
-		int arguments[100];
-
 		for (int input = 0; input < 4; input++) {
 			int x = arguments[0] = input & 1;
 			int y = arguments[1] = input >> 1;
@@ -97,9 +95,6 @@ int main(int argc, char** argv)
 		zvm_begin_program();
 		emit_functions();
 		zvm_end_program(module_id_or);
-
-		int retvals[100];
-		int arguments[100];
 
 		for (int input = 0; input < 4; input++) {
 			int x = arguments[0] = input & 1;
@@ -125,9 +120,6 @@ int main(int argc, char** argv)
 		zvm_op_output(1, op_or(i1,i2));
 
 		zvm_end_program(zvm_end_module());
-
-		int retvals[100];
-		int arguments[100];
 
 		for (int input = 0; input < 8; input++) {
 			int x = arguments[0] = input & 1;
