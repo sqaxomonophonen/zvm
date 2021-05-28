@@ -1587,14 +1587,12 @@ static int get_unit_delay_index(struct module* mod, uint32_t p)
 	DEFOP(STATEFUL_CALL,3) \
 	DEFOP(STATELESS_CALL,2) \
 	DEFOP(RETURN,0) \
-	DEFOP(ARITH_2_1,3) \
-	DEFOP(ARITH_1_1,2) \
+	DEFOP(A21,3) \
+	DEFOP(A11,2) \
 	DEFOP(MOVE,2) \
 	DEFOP(WRITE,2) \
 	DEFOP(READ,2) \
 	DEFOP(LOADIMM,2)
-
-
 
 #define OP(op) OP_##op
 
@@ -1673,7 +1671,6 @@ static void fn_tracer_hawk_registers(struct fn_tracer* ft, int n)
 
 static uint32_t fn_trace_rec(struct fn_tracer* ft, struct zvm_pi pi)
 {
-
 	zvm_assert((ft->mod->code_begin_p <= pi.p && pi.p < ft->mod->code_end_p) && "p out of range");
 
 	uint32_t stored_reg = node_output_map_get(ft->mod, pi);
@@ -1694,7 +1691,12 @@ static uint32_t fn_trace_rec(struct fn_tracer* ft, struct zvm_pi pi)
 		uint32_t src0_reg = fn_trace_rec(ft, argpi(pi.p, 0));
 		uint32_t src1_reg = fn_trace_rec(ft, argpi(pi.p, 1));
 		uint32_t dst_reg = fn_tracer_alloc_register(ft);
-		emit4(OP(ARITH_2_1), dst_reg, src0_reg, src1_reg); // XXX NOR where?
+		emit4(code, dst_reg, src0_reg, src1_reg); // assuming same encoding for arithmetic ops
+		return dst_reg;
+	} else if (op == ZVM_OP(A11)) {
+		uint32_t src_reg = fn_trace_rec(ft, argpi(pi.p, 0));
+		uint32_t dst_reg = fn_tracer_alloc_register(ft);
+		emit3(code, dst_reg, src_reg); // assuming same encoding for arithmetic ops
 		return dst_reg;
 	} else if (op == ZVM_OP(UNIT_DELAY)) {
 		uint32_t dst_reg = fn_tracer_alloc_register(ft);
