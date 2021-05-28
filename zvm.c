@@ -2132,10 +2132,14 @@ static inline struct call_stack_entry* mtop()
 	return &m->call_stack[m->call_stack_top];
 }
 
-static void mpush(struct call_stack_entry e)
+static void mpush(int pc, int reg0, int state_offset)
 {
-	// XXX do relative/incremental? like add call_stack_entry to previous entry?
 	struct machine* m = &g.machine;
+	struct call_stack_entry e = {
+		.pc = pc,
+		.reg0 = reg0,
+		.state_offset = state_offset,
+	};
 	memcpy(&m->call_stack[++m->call_stack_top], &e, sizeof e);
 }
 
@@ -2198,22 +2202,32 @@ void zvm_run(int* retvals, int* arguments)
 	//struct machine* machine = &g.machine;
 
 	int executing = 1;
-	while (executing) {
+	int iterations_remaining = 100;
+	while (executing && iterations_remaining-- > 0) {
 		uint32_t bytecode = g.bytecode[pc];
 
 		uint32_t* arg = &g.bytecode[pc+1];
 
 		int op = ZVM_OP_DECODE_X(bytecode);
 
+		int next_pc = pc + get_bytecode_op_length(bytecode);
+
 		switch (op) {
 		case OP(STATEFUL_CALL):
-			zvm_assert(!"TODO");
+			mtop()->pc = next_pc; // return address
+			pc = arg[0];
+			mpush(pc, mtop()->reg0 + arg[1], mtop()->state_offset + arg[2]);
 			break;
 		case OP(STATELESS_CALL):
-			zvm_assert(!"TODO");
-			break;
+			mtop()->pc = next_pc; // return address
+			pc = arg[0];
+			mpush(pc, mtop()->reg0 + arg[1], mtop()->state_offset);
+			continue;
 		case OP(RETURN):
-			if (mpop() < 0) {
+			if (mpop() >= 0) {
+				pc = mtop()->pc;
+				continue;
+			} else {
 				g.machine.call_stack_top = 0; // gotcha ya stupid f!%$&
 				executing = 0;
 			}
@@ -2240,8 +2254,10 @@ void zvm_run(int* retvals, int* arguments)
 			zvm_assert(!"unhandled op");
 		}
 
-		pc += get_bytecode_op_length(bytecode);
+		pc = next_pc;
 	}
+
+	zvm_assert(iterations_remaining > 0);
 
 	if (retvals != NULL) {
 		for (int i = 0; i < main_function->n_retvals; i++) {
