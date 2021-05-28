@@ -39,6 +39,14 @@ static void emit_functions()
 	module_id_not = emit_not();
 }
 
+static struct zvm_pi mod1(uint32_t module_id, struct zvm_pi x0)
+{
+	struct zvm_pi pi = zvm_op_instance(module_id);
+	zvm_arg(x0);
+	pi.i = 0;
+	return pi;
+}
+
 static struct zvm_pi mod2(uint32_t module_id, struct zvm_pi x0, struct zvm_pi x1)
 {
 	struct zvm_pi pi = zvm_op_instance(module_id);
@@ -51,6 +59,38 @@ static struct zvm_pi mod2(uint32_t module_id, struct zvm_pi x0, struct zvm_pi x1
 static struct zvm_pi op_or(struct zvm_pi x0, struct zvm_pi x1)
 {
 	return mod2(module_id_or, x0, x1);
+}
+
+static struct zvm_pi op_and(struct zvm_pi x0, struct zvm_pi x1)
+{
+	return mod2(module_id_and, x0, x1);
+}
+
+static struct zvm_pi op_not(struct zvm_pi x0)
+{
+	return mod1(module_id_not, x0);
+}
+
+static uint32_t emit_decoder(int n_in)
+{
+	const int n_out = 1 << n_in;
+	zvm_begin_module(n_in, n_out);
+
+	const int MAX_IN = 8;
+	zvm_assert(n_in <= MAX_IN);
+	struct zvm_pi inputs[MAX_IN];
+	for (int j = 0; j < n_in; j++) inputs[j] = zvm_op_input(j);
+
+	for (int i = 0; i < n_out; i++) {
+		struct zvm_pi x = {0};
+		int m = 1;
+		for (int j = 0; j < n_in; j++, m<<=1) {
+			struct zvm_pi y = i&m ? inputs[j] : op_not(inputs[j]);
+			x = (j == 0) ? (y) : (op_and(x, y));
+		}
+		zvm_op_output(i, x);
+	}
+	return zvm_end_module();
 }
 
 int retvals[100];
@@ -129,6 +169,32 @@ int main(int argc, char** argv)
 			printf("COMB(%d,%d,%d) => [%d,%d]\n", x, y, z, retvals[0], retvals[1]);
 			zvm_assert((retvals[0] == (x||y)) && "test fail");
 			zvm_assert((retvals[1] == (y||z)) && "test fail");
+		}
+	}
+
+	// TEST DECODER
+	for (int n = 1; n <= 6; n++) {
+		zvm_begin_program();
+		emit_functions();
+		zvm_end_program(emit_decoder(n));
+
+		int n2 = 1<<n;
+		for (int a = 0; a < n2; a++) {
+			printf("DEMUX_%d_TO_%d(", n, n2);
+			for (int input = 0; input < n; input++) {
+				int v = arguments[input] = !!(a & (1 << input));
+				if (input > 0) printf(",");
+				printf("%d", v);
+			}
+			zvm_run(retvals, arguments);
+			printf(") => [");
+			for (int output = 0; output < n2; output++) {
+				if (output > 0) printf(",");
+				printf("%d", retvals[output]);
+
+				zvm_assert(retvals[output] == (output == a));
+			}
+			printf("]\n");
 		}
 	}
 
