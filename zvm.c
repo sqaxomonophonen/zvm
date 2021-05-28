@@ -118,6 +118,7 @@ struct globals {
 
 	uint32_t main_module_id;
 	uint32_t main_substance_id;
+	uint32_t main_function_id;
 
 	struct machine machine;
 } g;
@@ -185,13 +186,6 @@ static struct module* get_instance_mod_for_nodecode(uint32_t nodecode)
 static struct module* get_instance_mod_at_p(uint32_t p)
 {
 	return get_instance_mod_for_nodecode(*bufp(p));
-}
-
-void zvm_init()
-{
-	zvm_assert(ZVM_OP_N <= ZVM_OP_MASK);
-	//memset(ZVM, 0, sizeof(*ZVM));
-	memset(&g, 0, sizeof(g));
 }
 
 void zvm_begin_program()
@@ -1538,13 +1532,13 @@ static void process_substance(uint32_t substance_id)
 	}
 }
 
-static void emit_function_stubs_rec(int substance_id)
+static uint32_t emit_function_stubs_rec(int substance_id)
 {
 	struct substance* sb = &g.substances[substance_id];
 
 	sb->refcount++;
 
-	if (sb->tag) return;
+	if (sb->tag) return ZVM_NIL;
 	sb->tag = 1;
 
 	const int n_steps = sb->n_steps;
@@ -1591,6 +1585,8 @@ static void emit_function_stubs_rec(int substance_id)
 
 	bs32s_restore_len();
 
+	uint32_t function_id = zvm_arrlen(g.functions);
+
 	struct function fn = {
 		.substance_id = substance_id,
 		.n_retvals = n_retvals,
@@ -1602,24 +1598,7 @@ static void emit_function_stubs_rec(int substance_id)
 
 	zvm_arrpush(g.functions, fn);
 
-	// TODO can I do some local analysis here...?
-	//
-	//  - truth table optimization... it's probably not even worth storing
-	//    the information because it's something like, "do truth table
-	//    optimization if !has_state && n_inputs < 8", or, instead of
-	//    basing it on number of inputs, base it on the size of the truth
-	//    table... e.g. I can store the truth table for a 4-to-16 decoder
-	//    in 256 bits (16 possible inputs; 16 output bits each; 16*16=256).
-	//    actually... state doesn't prevent truth table optimization as
-	//    long as state bits are counted as inputs? maybe?
-	//
-	//  - inline-ability? local analysis can reveal the complexity, and
-	//    seems somewhat related to truth-table optimization stuff?
-	//    however, inline-ability may also be based on top-down analysis
-	//    (e.g. if a substance is seen only once, then there's not really
-	//    any reason not to inline it, except, maybe, for the important
-	//    purpose of emitting bytecode than can be disassembled and made
-	//    sense of, but that's like "-O0 -g")
+	return function_id;
 }
 
 static void clear_substance_tags()
@@ -1940,7 +1919,7 @@ static void emit_function_bytecode(uint32_t function_id)
 static void emit_functions()
 {
 	clear_substance_tags();
-	emit_function_stubs_rec(g.main_substance_id);
+	g.main_function_id = emit_function_stubs_rec(g.main_substance_id);
 
 	const int n_functions = zvm_arrlen(g.functions);
 	for (int i = 0; i < n_functions; i++) {
@@ -2132,9 +2111,31 @@ void zvm_end_program(uint32_t main_module_id)
 	#ifdef VERBOSE_DEBUG
 	disasm();
 	#endif
+
+	// TODO prep machine
+}
+
+#define REGISTER_STACK_SIZE (1<<16)
+#define CALL_STACK_SIZE (1<<8)
+
+static void machine_init()
+{
+	struct machine* m = &g.machine;
+
+	zvm_arrsetlen(m->register_stack, REGISTER_STACK_SIZE);
+	zvm_arrsetlen(m->call_stack, CALL_STACK_SIZE);
 }
 
 void zvm_run(uint32_t* arguments, uint32_t* retvals)
 {
-	// TODO
+	//struct function* main_function = &g.functions[g.main_function_id];
+}
+
+void zvm_init()
+{
+	zvm_assert(ZVM_OP_N <= ZVM_OP_MASK);
+	//memset(ZVM, 0, sizeof(*ZVM));
+	memset(&g, 0, sizeof(g));
+
+	machine_init();
 }
