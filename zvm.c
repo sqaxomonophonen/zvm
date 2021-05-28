@@ -574,6 +574,7 @@ int zvm_end_module()
 	struct zvm_pi* np = NULL;
 
 	mod->state_index_map_i = zvm_arrlen(g.state_index_maps);
+	int next_state_index = 0;
 
 	for (int pass = 0; pass < 2; pass++) {
 		int n_nodes_total = 0;
@@ -596,14 +597,13 @@ int zvm_end_module()
 					*output = argpi(p, 0);
 				} else if (op == ZVM_OP(UNIT_DELAY)) {
 					mod->n_bits++; // XXX might not be connected?
-					zvm_arrpush(g.state_index_maps, zvm_pi(p, mod->state_index_map_n));
-					mod->state_index_map_n++;
+					zvm_arrpush(g.state_index_maps, zvm_pi(p, next_state_index++));
 				} else if (op == ZVM_OP(INSTANCE)) {
 					struct module* instance_mod = get_instance_mod_for_code(code);
 					mod->n_bits += instance_mod->n_bits; // XXX might not be connected?
 					if (instance_mod->n_bits > 0) {
-						zvm_arrpush(g.state_index_maps, zvm_pi(p, mod->state_index_map_n));
-						mod->state_index_map_n++;
+						zvm_arrpush(g.state_index_maps, zvm_pi(p, next_state_index));
+						next_state_index += instance_mod->n_bits;
 					}
 				}
 			}
@@ -631,6 +631,8 @@ int zvm_end_module()
 			// order
 		}
 	}
+
+	mod->state_index_map_n = zvm_arrlen(g.state_index_maps) - mod->state_index_map_i;
 
 	mod->node_output_bs32i = module_alloc_node_output_bs32(mod);
 
