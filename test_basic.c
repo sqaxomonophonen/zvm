@@ -173,7 +173,7 @@ int main(int argc, char** argv)
 	}
 
 	// TEST DECODER
-	for (int n = 1; n <= 6; n++) {
+	for (int n = 1; n <= 5; n++) {
 		zvm_begin_program();
 		emit_functions();
 		zvm_end_program(emit_decoder(n));
