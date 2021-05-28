@@ -1833,10 +1833,108 @@ static void emit_functions()
 	#endif
 }
 
+static int get_bytecode_op_args(uint32_t bytecode)
+{
+	uint32_t op = ZVM_OP_DECODE_X(bytecode);
+	switch (op) {
+		#define DEFOP(op,narg) case OP(op): return narg;
+		OPS
+		#undef DEFOP
+	}
+	zvm_assert("!unhandled op");
+	return 0;
+}
+
+static int get_bytecode_op_length(uint32_t bytecode)
+{
+	return 1 + get_bytecode_op_args(bytecode);
+}
+
+static const char* get_bytecode_op_name(uint32_t bytecode)
+{
+	uint32_t op = ZVM_OP_DECODE_X(bytecode);
+	switch (op) {
+		#define DEFOP(op,narg) case OP(op): return #op;
+		OPS
+		#undef DEFOP
+	}
+	zvm_assert("!unhandled op");
+	return NULL;
+}
+
+static void disasm_function_id(int function_id)
+{
+	struct function* fn = &g.functions[function_id];
+	uint32_t bytecode_end = fn->bytecode_i + fn->bytecode_n;
+
+	printf("\n");
+	printf("; function %d. $%.6x - $%.6x\n", function_id, fn->bytecode_i, bytecode_end);
+
+	uint32_t pc = fn->bytecode_i;
+	while (pc < bytecode_end) {
+		uint32_t bytecode = g.bytecode[pc];
+		uint32_t op = ZVM_OP_DECODE_X(bytecode);
+
+		printf("pc=$%.6x   ", pc);
+		int len = get_bytecode_op_length(bytecode);
+		const int max_len = 4;
+		zvm_assert(len <= max_len);
+		for (int i = 0; i < max_len; i++) {
+			if (i < len) {
+				printf(" %.8x", g.bytecode[pc+i]);
+			} else {
+				printf("         ");
+			}
+		}
+
+		printf("    ");
+
+		uint32_t* args = &g.bytecode[pc+1];
+
+		printf("%s", get_bytecode_op_name(bytecode));
+		printf("(");
+		switch (op) {
+		case OP(STATEFUL_CALL):
+			printf("pc=$%.6x, regbase=%d, stbase=%d", args[0], args[1], args[2]);
+			break;
+		case OP(STATELESS_CALL):
+			printf("pc=$%.6x, regbase=%d", args[0], args[1]);
+			break;
+		case OP(RETURN):
+			break;
+		case OP(A21):
+			printf("dst=r%d, src0=r%d, src1=r%d", args[0], args[1], args[2]);
+			break;
+		case OP(A11):
+			printf("dst=r%d, src=r%d", args[0], args[1]);
+			break;
+		case OP(MOVE):
+			printf("dst=r%d, src=r%d", args[0], args[1]);
+			break;
+		case OP(WRITE):
+			printf("st=%d, src=r%d", args[0], args[1]);
+			break;
+		case OP(READ):
+			printf("dst=r%d, st=%d", args[0], args[1]);
+			break;
+		case OP(LOADIMM):
+			printf("dst=r%d, imm=%d", args[0], args[1]);
+			break;
+		default: zvm_assert(!"unhandled op");
+		}
+		printf(")");
+
+		printf("\n");
+
+		pc += len;
+	}
+}
+
 static void disasm()
 {
 	const int n_functions = zvm_arrlen(g.functions);
 	for (int i = 0; i < n_functions; i++) {
+		disasm_function_id(i);
 	}
 }
 
