@@ -1686,7 +1686,7 @@ static uint32_t fn_trace_rec(struct fn_tracer* ft, struct zvm_pi pi)
 		emit3(OP(LOADIMM), dst, ZVM_OP_DECODE_Y(code));
 		return dst;
 	} else if (op == ZVM_OP(INPUT)) {
-		return 0; // XXX
+		return 0; // XXX I need to lookup the argument register...
 	} else if (op == ZVM_OP(A21)) {
 		uint32_t src0_reg = fn_trace_rec(ft, argpi(pi.p, 0));
 		uint32_t src1_reg = fn_trace_rec(ft, argpi(pi.p, 1));
