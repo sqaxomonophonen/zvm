@@ -1695,7 +1695,7 @@ static uint32_t fn_trace_rec(struct fn_tracer* ft, struct zvm_pi pi)
 	} else if (op == ZVM_OP(A11)) {
 		uint32_t src_reg = fn_trace_rec(ft, argpi(pi.p, 0));
 		uint32_t dst_reg = fn_tracer_alloc_register(ft);
-		emit3(ZVM_OP_ENCODE_XY(OP(A21), ZVM_OP_DECODE_Y(nodecode)), dst_reg, src_reg);
+		emit3(ZVM_OP_ENCODE_XY(OP(A11), ZVM_OP_DECODE_Y(nodecode)), dst_reg, src_reg);
 		return dst_reg;
 	} else if (op == ZVM_OP(UNIT_DELAY)) {
 		uint32_t dst_reg = fn_tracer_alloc_register(ft);
