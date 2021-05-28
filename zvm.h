@@ -74,7 +74,6 @@ static inline struct zvm_pi zvm_pii(struct zvm_pi pi, uint32_t new_i)
 #define ZVM_OP_DECODE_X(op) ((op) & ZVM_OP_MASK)
 #define ZVM_OP_DECODE_Y(op) ((op) >> ZVM_OP_BITS)
 
-
 #define ZVM_ARRAY_LENGTH(x) (sizeof(x)/sizeof(x[0]))
 
 #define zvm_assert assert

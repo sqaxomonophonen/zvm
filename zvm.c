@@ -38,10 +38,6 @@ struct unit_delay_index {
 	uint32_t index;
 };
 
-struct output {
-	uint32_t p;
-};
-
 struct substance_key {
 	uint32_t module_id;
 	uint32_t outcome_request_bs32i;
@@ -87,7 +83,7 @@ struct globals {
 	struct substance_keyval* substance_keyvals;
 	struct substance* substances;
 	struct function* functions;
-	struct output* outputs;
+	struct zvm_pi* outputs;
 	struct step* steps;
 	uint32_t* bs32s;
 	uint32_t* bytecode;
@@ -512,23 +508,23 @@ static void trace(struct tracer* tr, struct zvm_pi pi)
 static void trace_inputs_rec_module_input_visitor(struct tracer* tr, uint32_t p)
 {
 	uint32_t* input_bs32 = (uint32_t*)tr->usr;
-	bs32_set(input_bs32, ZVM_GET_SPECIALY(p));
+	bs32_set(input_bs32, ZVM_OP_DECODE_Y(*bufp(p)));
 }
 
-static void trace_inputs_rec(struct module* mod, uint32_t* input_bs32, uint32_t p)
+static void trace_inputs_rec(struct module* mod, uint32_t* input_bs32, struct zvm_pi pi)
 {
 	struct tracer tr = {
 		.mod = mod,
 		.usr = input_bs32,
 		.module_input_visitor = trace_inputs_rec_module_input_visitor,
 	};
-	trace(&tr, p);
+	trace(&tr, pi);
 }
 
-static void trace_inputs(struct module* mod, uint32_t* input_bs32, uint32_t p)
+static void trace_inputs(struct module* mod, uint32_t* input_bs32, struct zvm_pi pi)
 {
 	clear_node_visit_set(mod);
-	trace_inputs_rec(mod, input_bs32, p);
+	trace_inputs_rec(mod, input_bs32, pi);
 }
 
 static void trace_state_deps(uint32_t* input_bs32, struct module* mod)
@@ -541,14 +537,14 @@ static void trace_state_deps(uint32_t* input_bs32, struct module* mod)
 		uint32_t code = *bufp(p);
 		const int op = ZVM_OP_DECODE_X(code);
 		if (op == ZVM_OP(UNIT_DELAY)) {
-			trace_inputs_rec(mod, input_bs32, *bufp(zvm__arg_index(p,0)));
+			trace_inputs_rec(mod, input_bs32, argpi(p,0));
 		} else if (op == ZVM_OP(INSTANCE)) {
 			struct module* instance_mod = get_instance_mod_for_code(code);
 			uint32_t* ibs = get_state_input_dep_bs32(instance_mod);
 			int n_inputs = instance_mod->n_inputs;
 			for (int i = 0; i < n_inputs; i++) {
 				if (bs32_test(ibs, i)) {
-					trace_inputs_rec(mod, input_bs32, *bufp(zvm__arg_index(p,i)));
+					trace_inputs_rec(mod, input_bs32, argpi(p,i));
 				}
 			}
 		}
@@ -568,12 +564,11 @@ int zvm_end_module()
 
 	mod->code_end_p = buftop();
 
-	struct output* outputs = zvm_arradd(g.outputs, mod->n_outputs);
+	struct zvm_pi* outputs = zvm_arradd(g.outputs, mod->n_outputs);
 	mod->outputs_i = outputs - g.outputs;
+	memset(outputs, 0, mod->n_outputs * sizeof(*outputs));
 	for (int i = 0; i < mod->n_outputs; i++) {
-		struct output* o = &outputs[i];
-		memset(o, 0, sizeof *o);
-		o->p = ZVM_PLACEHOLDER;
+		outputs[i] = ZVM_PI_PLACEHOLDER;
 	}
 
 	struct zvm_pi* np = NULL;
@@ -596,7 +591,7 @@ int zvm_end_module()
 				if (op == ZVM_OP(OUTPUT)) {
 					int output_index = ZVM_OP_DECODE_Y(code);
 					zvm_assert(0 <= output_index && output_index < mod->n_outputs);
-					struct output* output = &g.outputs[mod->outputs_i + output_index];
+					struct zvm_pi* output = &g.outputs[mod->outputs_i + output_index];
 					zvm_assert((output->p == ZVM_PLACEHOLDER) && "double assignment");
 					output->p = *bufp(zvm__arg_index(p, 0));
 				} else if (op == ZVM_OP(UNIT_DELAY)) {
@@ -613,9 +608,9 @@ int zvm_end_module()
 			}
 
 			if (pass == 1) {
-				for (int index = 0; index < n_node_outputs; index++) {
+				for (int i = 0; i < n_node_outputs; i++) {
 					np->p = p;
-					np->index = index;
+					np->i = i;
 					np++;
 				}
 			}
@@ -657,7 +652,7 @@ int zvm_end_module()
 	// trace output input-dependencies
 	for (int i = 0; i < mod->n_outputs; i++) {
 		uint32_t* output_input_dep_bs32 = get_output_input_dep_bs32(mod, i);
-		trace_inputs(mod, output_input_dep_bs32, g.outputs[mod->outputs_i + i].p);
+		trace_inputs(mod, output_input_dep_bs32, g.outputs[mod->outputs_i + i]);
 		#ifdef VERBOSE_DEBUG
 		printf("o[%d]: ", i); bs32_print(mod->n_inputs, output_input_dep_bs32); printf("\n");
 		#endif
@@ -836,14 +831,14 @@ static struct drout* drout_find(struct drout* drouts, int n, uint32_t kp, uint32
 	return drouts + drout_find_index(drouts, n, kp, ki);
 }
 
-static void add_drain_instance_output_visitor(struct tracer* tr, uint32_t p, int output_index)
+static void add_drain_instance_output_visitor(struct tracer* tr, struct zvm_pi pi)
 {
-	struct module* instance_mod = get_instance_mod_at_p(p);
+	struct module* instance_mod = get_instance_mod_at_p(pi.p);
 	for (int i = 0; i < instance_mod->n_inputs; i++) {
-		if (!bs32_test(get_output_input_dep_bs32(instance_mod, output_index), i)) {
+		if (!bs32_test(get_output_input_dep_bs32(instance_mod, pi.i), i)) {
 			continue;
 		}
-		push_drain(p, i);
+		push_drain(pi.p, i);
 	}
 }
 
@@ -860,9 +855,9 @@ static void add_drain(uint32_t substance_id, uint32_t p, int index)
 		.mod = &g.modules[resolve_substance_id(substance_id)->key.module_id],
 		.instance_output_visitor = add_drain_instance_output_visitor
 	};
-	uint32_t pp = (p == ZVM_NIL_P)
-		? g.outputs[tr.mod->outputs_i + index].p
-		: *bufp(zvm__arg_index(p, index));
+	struct zvm_pi pp = (p == ZVM_NIL)
+		? g.outputs[tr.mod->outputs_i + index]
+		: argpi(p, index);
 	trace(&tr, pp);
 }
 
