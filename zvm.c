@@ -159,9 +159,9 @@ static inline int module_has_state(struct module* mod)
 
 static struct module* get_instance_mod_for_code(uint32_t code)
 {
-	const int op = code & ZVM_OP_MASK;
+	const int op = ZVM_OP_DECODE_X(code);
 	zvm_assert(op == ZVM_OP(INSTANCE) && "expected op to be an instance");
-	const int instance_module_id = code >> ZVM_OP_BITS;
+	const int instance_module_id = ZVM_OP_DECODE_Y(code);
 	zvm_assert(is_valid_module_id(instance_module_id));
 	return &g.modules[instance_module_id];
 }
@@ -370,14 +370,14 @@ static uint32_t* get_outcome_index_input_dep_bs32(struct module* mod, uint32_t o
 
 static inline int get_op_n_args(uint32_t code)
 {
-	int op = code & ZVM_OP_MASK;
+	const int op = ZVM_OP_DECODE_X(code);
 	if (op == ZVM_OP(INSTANCE)) {
 		return get_instance_mod_for_code(code)->n_inputs;
 	}
 	switch (op) {
-	#define DEFOP(op,narg) case ZVM_OP(op): zvm_assert(narg >= 0); return narg;
+	#define ZOP(op,narg) case ZVM_OP(op): zvm_assert(narg >= 0); return narg;
 	ZVM_OPS
-	#undef DEFOP
+	#undef ZOP
 	default: zvm_assert(!"unhandled op"); return 0;
 	}
 }
@@ -397,7 +397,7 @@ static int get_op_length(uint32_t p)
 static int get_op_n_outputs(uint32_t p)
 {
 	uint32_t code = *bufp(p);
-	int op = code & ZVM_OP_MASK;
+	const int op = ZVM_OP_DECODE_X(code);
 	if (op == ZVM_OP(INSTANCE)) {
 		return get_instance_mod_for_code(code)->n_outputs;
 	}
@@ -499,7 +499,7 @@ static void trace(struct tracer* tr, uint32_t p)
 
 		uint32_t code = *bufp(p);
 
-		int op = code & ZVM_OP_MASK;
+		const int op = ZVM_OP_DECODE_X(code);
 		if (op == ZVM_OP(INSTANCE)) {
 			struct module* instance_mod = get_instance_mod_for_code(code);
 			if (instance_mod->n_outputs == 1 && unpack_index == -1) unpack_index = 0;
@@ -523,7 +523,7 @@ static void trace(struct tracer* tr, uint32_t p)
 		zvm_assert(unpack_index == -1 && "unexpected unpack");
 
 		if (op == ZVM_OP(UNPACK)) {
-			unpack_index = code >> ZVM_OP_BITS;
+			unpack_index = ZVM_OP_DECODE_Y(code);
 			p = *bufp(zvm__arg_index(p, 0));
 			continue;
 		} else if (op == ZVM_OP(UNIT_DELAY)) {
@@ -569,7 +569,7 @@ static void trace_state_deps(uint32_t* input_bs32, struct module* mod)
 	const uint32_t p_end = mod->code_end_p;
 	while (p < p_end) {
 		uint32_t code = *bufp(p);
-		int op = code & ZVM_OP_MASK;
+		const int op = ZVM_OP_DECODE_X(code);
 		if (op == ZVM_OP(UNIT_DELAY)) {
 			trace_inputs_rec(mod, input_bs32, *bufp(zvm__arg_index(p,0)));
 		} else if (op == ZVM_OP(INSTANCE)) {
@@ -621,10 +621,10 @@ int zvm_end_module()
 			// setup outputs and n_bits
 			if (pass == 0) {
 				uint32_t code = *bufp(p);
-				int op = code & ZVM_OP_MASK;
+				const int op = ZVM_OP_DECODE_X(code);
 
 				if (op == ZVM_OP(OUTPUT)) {
-					int output_index = code >> ZVM_OP_BITS;
+					int output_index = ZVM_OP_DECODE_Y(code);
 					zvm_assert(0 <= output_index && output_index < mod->n_outputs);
 					struct output* output = &g.outputs[mod->outputs_i + output_index];
 					zvm_assert((output->p == ZVM_PLACEHOLDER) && "double assignment");
@@ -991,7 +991,7 @@ static int ack_substance(uint32_t p, uint32_t queue_i, int n, int* queue_np, int
 
 	uint32_t code = *bufp(p);
 
-	int instance_module_id = code >> ZVM_OP_BITS;
+	int instance_module_id = ZVM_OP_DECODE_Y(code);
 	zvm_assert(is_valid_module_id(instance_module_id));
 
 	struct module* instance_mod = &g.modules[instance_module_id];
@@ -1069,7 +1069,7 @@ static void process_substance(uint32_t substance_id)
 			const uint32_t p_end = mod->code_end_p;
 			while (p < p_end) {
 				uint32_t code = *bufp(p);
-				int op = code & ZVM_OP_MASK;
+				const int op = ZVM_OP_DECODE_X(code);
 				if (op == ZVM_OP(UNIT_DELAY)) {
 					add_drain(substance_id, p, 0);
 				} else if (op == ZVM_OP(INSTANCE)) {
@@ -1133,7 +1133,7 @@ static void process_substance(uint32_t substance_id)
 			}
 			struct node_output* node_output = &g.node_outputs[mod->node_outputs_i + i];
 			uint32_t code = *bufp(node_output->p);
-			int op = code & ZVM_OP_MASK;
+			const int op = ZVM_OP_DECODE_X(code);
 			if (op != ZVM_OP(INSTANCE)) {
 				continue;
 			}
@@ -1147,7 +1147,7 @@ static void process_substance(uint32_t substance_id)
 			const uint32_t p_end = mod->code_end_p;
 			while (p < p_end) {
 				uint32_t code = *bufp(p);
-				int op = code & ZVM_OP_MASK;
+				const int op = ZVM_OP_DECODE_X(code);
 				if (op == ZVM_OP(INSTANCE)) {
 					if (module_has_state(get_instance_mod_for_code(code))) {
 						push_outcome(p, ZVM_NIL_ID);
@@ -1493,7 +1493,7 @@ static void process_substance(uint32_t substance_id)
 			if (p != ZVM_NIL_P) {
 				zvm_assert(!ZVM_IS_SPECIAL(p));
 				uint32_t code = *bufp(p);
-				int op = code & ZVM_OP_MASK;
+				const int op = ZVM_OP_DECODE_X(code);
 				if (op == ZVM_OP(UNIT_DELAY)) {
 					push_step(p, ZVM_NIL_ID);
 				}
@@ -1746,12 +1746,12 @@ static uint32_t fn_trace_rec(struct fn_tracer* ft, uint32_t p, int unpack_index)
 	}
 
 	uint32_t code = *bufp(p);
-	int op = code & ZVM_OP_MASK;
+	const int op = ZVM_OP_DECODE_X(code);
 
 	if (op == ZVM_OP(UNPACK)) {
 		zvm_assert((unpack_index == -1) && "double unpack");
-		return fn_trace_rec(ft, *bufp(zvm__arg_index(p, 0)), code >> ZVM_OP_BITS);
-	} else if (op == ZVM_OP(NOR)) {
+		return fn_trace_rec(ft, *bufp(zvm__arg_index(p, 0)), ZVM_OP_DECODE_Y(code));
+	} else if (op == ZVM_OP(A21)) {
 		zvm_assert((unpack_index == -1) && "unexpected unpack");
 		uint32_t src0_reg = fn_trace_rec(ft, *bufp(zvm__arg_index(p, 0)), -1);
 		uint32_t src1_reg = fn_trace_rec(ft, *bufp(zvm__arg_index(p, 1)), -1);
@@ -1810,7 +1810,7 @@ static void emit_function_code(uint32_t function_id)
 			int stateful_call = module_has_state(step_mod);
 			zvm_assert((!stateful_call || module_has_state(mod)) && "stateful call inside stateless function");
 
-			zvm_assert((step_sb->key.module_id == (*bufp(step->p) >> ZVM_OP_BITS)) && "subkey/op module id mismatch");
+			zvm_assert((step_sb->key.module_id == ZVM_OP_DECODE_Y(*bufp(step->p))) && "subkey/op module id mismatch");
 
 			uint32_t outcome_request_bs32i = step_sb->key.outcome_request_bs32i;
 

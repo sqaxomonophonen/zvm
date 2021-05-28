@@ -5,50 +5,96 @@
 
 #define ZVM_OPS \
 	\
-	DEFOP(NOR,2) \
-	DEFOP(UNIT_DELAY,1) \
-	DEFOP(INSTANCE,-1) \
-	DEFOP(UNPACK,1) \
-	DEFOP(OUTPUT,1)
-
+	ZOP(NIL,-1) \
+	ZOP(A21,2) \
+	ZOP(A11,1) \
+	ZOP(UNIT_DELAY,1) \
+	ZOP(INSTANCE,-1) \
+	ZOP(INPUT,0) \
+	ZOP(OUTPUT,1) \
+	ZOP(CONST,0) \
+	ZOP(N,-1)
 
 #define ZVM_OP(op) ZVM_OP_##op
+#define ZVM_A11_OP(op) ZVM_A11_OP_##op
+#define ZVM_A21_OP(op) ZVM_A21_OP_##op
+
+// arithmetic 2-to-1 ops
+#define ZVM_A21_OPS \
+	\
+	ZOP(NIL) \
+	ZOP(NOR) \
+	ZOP(NAND) \
+	ZOP(OR) \
+	ZOP(AND) \
+	ZOP(XOR) \
+	ZOP(N)
+
+// arithmetic 1-to-1 ops
+#define ZVM_A11_OPS \
+	\
+	ZOP(NIL) \
+	ZOP(NOT) \
+	ZOP(N)
+
+struct zvm_pi {
+	uint32_t p;
+	uint32_t i;
+};
 
 
-#define ZVM_SPECIAL0           (0xf0000000)
-#define ZVM_SPECIALXY(x,y)     (ZVM_SPECIAL0 + (((x)&0xfff)<<16) + ((y)&0xffff))
-#define ZVM_IS_SPECIALX(v,x)   (((v)&0xffff0000) == ZVM_SPECIALXY(x,0))
-#define ZVM_IS_SPECIAL(v)      ((v) >= ZVM_SPECIAL0)
-#define ZVM_GET_SPECIALY(v)    ((v) & 0xffff)
+#define ZVM_NIL             ((uint32_t)-1)
+#define ZVM_PLACEHOLDER     ZVM_NIL
+#define ZVM_PI_PLACEHOLDER  zvm_pi(ZVM_PLACEHOLDER,ZVM_PLACEHOLDER)
 
-#define ZVM_X_TAG   (1)
-#define ZVM_X_CONST (2)
-#define ZVM_X_INPUT (3)
+static inline struct zvm_pi zvm_pi(uint32_t p, uint32_t i)
+{
+	return (struct zvm_pi) { .p=p, .i=i };
+}
 
-#define ZVM_PLACEHOLDER      ZVM_SPECIALXY(ZVM_X_TAG,   1)
-#define ZVM_ZERO             ZVM_SPECIALXY(ZVM_X_CONST, 0)
-#define ZVM_ONE              ZVM_SPECIALXY(ZVM_X_CONST, 1)
-#define ZVM_INPUT(i)         ZVM_SPECIALXY(ZVM_X_INPUT, i)
+static inline struct zvm_pi zvm_p0(uint32_t p)
+{
+	return zvm_pi(p,0);
+}
 
+static inline struct zvm_pi zvm_pn(uint32_t p)
+{
+	return zvm_pi(p,ZVM_NIL);
+}
 
-#define ZVM_NIL_ID ((uint32_t)-1)
-#define ZVM_NIL_P  ((uint32_t)-1)
-
+static inline struct zvm_pi zvm_pii(struct zvm_pi pi, uint32_t new_i)
+{
+	return zvm_pi(pi.p, new_i);
+}
 
 #define ZVM_OP_BITS (8)
 #define ZVM_OP_MASK ((1<<ZVM_OP_BITS )-1)
 #define ZVM_MAX_OP_ARG (1<<(32-ZVM_OP_BITS))
+#define ZVM_OP_ENCODE_XY(x,y) (((x) & ZVM_OP_MASK) | (((y) & ((1<<(32-ZVM_OP_BITS))-1)) << ZVM_OP_BITS))
+#define ZVM_OP_DECODE_X(op) ((op) & ZVM_OP_MASK)
+#define ZVM_OP_DECODE_Y(op) ((op) >> ZVM_OP_BITS)
+
 
 #define ZVM_ARRAY_LENGTH(x) (sizeof(x)/sizeof(x[0]))
 
 #define zvm_assert assert
 
 enum zvm_ops {
-	ZVM_OP_NIL = 0,
-	#define DEFOP(op,narg) ZVM_OP(op),
+	#define ZOP(op,narg) ZVM_OP(op),
 	ZVM_OPS
-	#undef DEFOP
-	ZVM_OP_N
+	#undef ZOP
+};
+
+enum zvm_a21_ops {
+	#define ZOP(op) ZVM_A21_OP(op),
+	ZVM_A21_OPS
+	#undef ZOP
+};
+
+enum zvm_a11_ops {
+	#define ZOP(op) ZVM_A11_OP(op),
+	ZVM_A11_OPS
+	#undef ZOP
 };
 
 // stolen from nothings/stb/stretchy_buffer.h
@@ -98,53 +144,83 @@ static inline uint32_t zvm_3x(uint32_t x0, uint32_t x1, uint32_t x2)
 	return xs - zvm__buf;
 }
 
-static inline uint32_t zvm_op_nor(uint32_t x, uint32_t y)
+static inline uint32_t zvm_5x(uint32_t x0, uint32_t x1, uint32_t x2, uint32_t x3, uint32_t x4)
 {
-	return zvm_3x(ZVM_OP(NOR), x, y);
+	uint32_t* xs = zvm_arradd(zvm__buf, 5);
+	xs[0] = x0;
+	xs[1] = x1;
+	xs[2] = x2;
+	xs[3] = x3;
+	xs[4] = x4;
+	return xs - zvm__buf;
 }
 
-static inline uint32_t zvm_op_instance(int module_id)
+static inline struct zvm_pi zvm_op21(uint32_t op, struct zvm_pi x, struct zvm_pi y)
+{
+	return zvm_p0(zvm_5x(op, x.p, x.i, y.p, y.i));
+}
+
+static inline struct zvm_pi zvm_op11(uint32_t op, struct zvm_pi x)
+{
+	return zvm_p0(zvm_3x(op, x.p, x.i));
+}
+
+static inline struct zvm_pi zvm_op_a21(uint32_t aop, struct zvm_pi x, struct zvm_pi y)
+{
+	return zvm_op21(ZVM_OP_ENCODE_XY(ZVM_OP(A21), aop), x, y);
+}
+
+static inline struct zvm_pi zvm_op_nor(struct zvm_pi x, struct zvm_pi y)
+{
+	return zvm_op_a21(ZVM_A21_OP(NOR), x, y);
+}
+
+static inline struct zvm_pi zvm_op_instance(int module_id)
 {
 	// expects module->n_inputs zvm_arg()'s following this
-	return zvm_1x(ZVM_OP(INSTANCE) | (module_id<<ZVM_OP_BITS));
+	return zvm_pn(zvm_1x(ZVM_OP_ENCODE_XY(ZVM_OP(INSTANCE), module_id)));
 }
 
-static inline uint32_t zvm_op_unit_delay(uint32_t x)
+static inline struct zvm_pi zvm_op_unit_delay(struct zvm_pi x)
 {
-	return zvm_2x(ZVM_OP(UNIT_DELAY), x);
+	return zvm_op11(ZVM_OP(UNIT_DELAY), x);
 }
 
-static inline uint32_t zvm_op_output(int index, uint32_t x)
+static inline struct zvm_pi zvm_op_input(int index)
 {
-	return zvm_2x((ZVM_OP(OUTPUT) | (index<<ZVM_OP_BITS)), x);
+	return zvm_p0(zvm_1x(ZVM_OP_ENCODE_XY(ZVM_OP(INPUT), index)));
 }
 
-static inline uint32_t zvm_arg(uint32_t arg)
+static inline struct zvm_pi zvm_op_output(int index, struct zvm_pi x)
 {
-	return zvm_1x(arg);
+	return zvm_pn(zvm_3x(ZVM_OP_ENCODE_XY(ZVM_OP(OUTPUT), index), x.p, x.i));
+}
+
+static inline struct zvm_pi zvm_op_const(int v)
+{
+	return zvm_p0(zvm_1x(ZVM_OP_ENCODE_XY(ZVM_OP(CONST), v)));
+}
+
+static inline uint32_t zvm_arg(struct zvm_pi x)
+{
+	return zvm_2x(x.p, x.i);
 }
 
 static inline int zvm__arg_index(uint32_t p, int index)
 {
-	return p+1+index;
+	return p+1+(index<<1);
 }
 
-static inline void zvm_assign_arg(uint32_t x, int index, uint32_t y)
+static inline void zvm_assign_arg(uint32_t p, int index, struct zvm_pi x)
 {
-	int i = zvm__arg_index(x, index);
+	int ai = zvm__arg_index(p, index);
 	#if DEBUG
 	//zvm_assert(zvm__is_valid_arg_index(x, index));
-	zvm_assert((zvm__buf[i] == ZVM_PLACEHOLDER) && "reassignment?");
+	zvm_assert((zvm__buf[ai] == ZVM_PLACEHOLDER) && "reassignment?");
+	zvm_assert((zvm__buf[ai+1] == ZVM_PLACEHOLDER) && "reassignment?!");
 	#endif
-	zvm__buf[i] = y;
-}
-
-static inline uint32_t zvm_op_unpack(int index, uint32_t x)
-{
-	#if DEBUG
-	zvm_assert(0 <= index && index < ZVM_MAX_OP_ARG);
-	#endif
-	return zvm_2x(ZVM_OP(UNPACK) | (index<<ZVM_OP_BITS), x);
+	zvm__buf[ai] = x.p;
+	zvm__buf[ai+1] = x.i;
 }
 
 #define ZVM_H

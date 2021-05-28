@@ -19,14 +19,16 @@ uint32_t module_id_ram64k;
 static uint32_t emit_and()
 {
 	zvm_begin_module(2, 1);
-	zvm_op_output(0, zvm_op_nor(zvm_op_nor(ZVM_INPUT(0), ZVM_INPUT(0)), zvm_op_nor(ZVM_INPUT(1), ZVM_INPUT(1))));
+	struct zvm_pi i0 = zvm_op_input(0);
+	struct zvm_pi i1 = zvm_op_input(1);
+	zvm_op_output(0, zvm_op_nor(zvm_op_nor(i0, i0), zvm_op_nor(i1, i1)));
 	return zvm_end_module();
 }
 
 static uint32_t emit_or()
 {
 	zvm_begin_module(2, 1);
-	uint32_t x = zvm_op_nor(ZVM_INPUT(0), ZVM_INPUT(1));
+	struct zvm_pi x = zvm_op_nor(zvm_op_input(0), zvm_op_input(1));
 	zvm_op_output(0, zvm_op_nor(x, x));
 	return zvm_end_module();
 }
@@ -34,36 +36,39 @@ static uint32_t emit_or()
 static uint32_t emit_not()
 {
 	zvm_begin_module(1, 1);
-	zvm_op_output(0, zvm_op_nor(ZVM_INPUT(0), ZVM_INPUT(0)));
+	struct zvm_pi i0 = zvm_op_input(0);
+	zvm_op_output(0, zvm_op_nor(i0, i0));
 	return zvm_end_module();
 }
 
-static uint32_t mod1(uint32_t module_id, uint32_t x0)
+static struct zvm_pi mod1(uint32_t module_id, struct zvm_pi x0)
 {
-	uint32_t id = zvm_op_instance(module_id);
+	struct zvm_pi pi = zvm_op_instance(module_id);
 	zvm_arg(x0);
-	return id;
+	pi.i = 0;
+	return pi;
 }
 
-static uint32_t mod2(uint32_t module_id, uint32_t x0, uint32_t x1)
+static struct zvm_pi mod2(uint32_t module_id, struct zvm_pi x0, struct zvm_pi x1)
 {
-	uint32_t id = zvm_op_instance(module_id);
+	struct zvm_pi pi = zvm_op_instance(module_id);
 	zvm_arg(x0);
 	zvm_arg(x1);
-	return id;
+	pi.i = 0;
+	return pi;
 }
 
-static uint32_t op_and(uint32_t x0, uint32_t x1)
+static struct zvm_pi op_and(struct zvm_pi x0, struct zvm_pi x1)
 {
 	return mod2(module_id_and, x0, x1);
 }
 
-static uint32_t op_or(uint32_t x0, uint32_t x1)
+static struct zvm_pi op_or(struct zvm_pi x0, struct zvm_pi x1)
 {
 	return mod2(module_id_or, x0, x1);
 }
 
-static uint32_t op_not(uint32_t x0)
+static struct zvm_pi op_not(struct zvm_pi x0)
 {
 	return mod1(module_id_not, x0);
 }
@@ -72,12 +77,17 @@ static uint32_t emit_decoder(int n_in)
 {
 	const int n_out = 1 << n_in;
 	zvm_begin_module(n_in, n_out);
+
+	const int MAX_IN = 8;
+	zvm_assert(n_in <= MAX_IN);
+	struct zvm_pi inputs[MAX_IN];
+	for (int j = 0; j < n_in; j++) inputs[j] = zvm_op_input(j);
+
 	for (int i = 0; i < n_out; i++) {
-		uint32_t x = 0;
+		struct zvm_pi x = {0};
 		int m = 1;
 		for (int j = 0; j < n_in; j++, m<<=1) {
-			uint32_t in = ZVM_INPUT(j);
-			uint32_t y = i&m ? in : op_not(in);
+			struct zvm_pi y = i&m ? inputs[j] : op_not(inputs[j]);
 			x = (j == 0) ? (y) : (op_and(x, y));
 		}
 		zvm_op_output(i, x);
@@ -88,22 +98,23 @@ static uint32_t emit_decoder(int n_in)
 static uint32_t emit_memory_bit()
 {
 	zvm_begin_module(2, 1);
-	const uint32_t WE = ZVM_INPUT(0);
-	const uint32_t IN = ZVM_INPUT(1);
-	uint32_t dly = zvm_op_unit_delay(ZVM_PLACEHOLDER);
+	const struct zvm_pi WE = zvm_op_input(0);
+	const struct zvm_pi IN = zvm_op_input(1);
+	struct zvm_pi dly = zvm_op_unit_delay(ZVM_PI_PLACEHOLDER);
 	zvm_op_output(0, dly);
-	zvm_assign_arg(dly, 0, op_or(op_and(op_not(WE), dly), op_and(WE, IN)));
+	zvm_assign_arg(dly.p, 0, op_or(op_and(op_not(WE), dly), op_and(WE, IN)));
 	return zvm_end_module();
 }
 
 static uint32_t emit_memory_byte()
 {
 	zvm_begin_module(10, 8);
-	const uint32_t RE = ZVM_INPUT(0);
-	const uint32_t WE = ZVM_INPUT(1);
+	const struct zvm_pi RE = zvm_op_input(0);
+	const struct zvm_pi WE = zvm_op_input(1);
 	for (int i = 0; i < 8; i++) {
-		uint32_t in = ZVM_INPUT(2+i);
-		uint32_t bit = zvm_op_instance(module_id_memory_bit);
+		struct zvm_pi in = zvm_op_input(2+i);
+		struct zvm_pi bit = zvm_op_instance(module_id_memory_bit);
+		bit.i = 0;
 		zvm_arg(WE);
 		zvm_arg(in);
 		zvm_op_output(i, op_and(RE, bit));
@@ -114,34 +125,45 @@ static uint32_t emit_memory_byte()
 
 static uint32_t emit_ram16(int address_bus_size, uint32_t ram_module_id)
 {
-	zvm_begin_module(10+address_bus_size, 8);
-	const uint32_t RE = ZVM_INPUT(0);
-	const uint32_t WE = ZVM_INPUT(1);
-	const uint32_t D =  ZVM_INPUT(2);
-	const uint32_t A =  ZVM_INPUT(2+8);
+	const int MAX_ADDRESS_BUS_SIZE = 16;
+	const int N_STD_INPUTS = 10;
+	const int MAX_INPUTS = N_STD_INPUTS + MAX_ADDRESS_BUS_SIZE;
+	zvm_assert(address_bus_size <= MAX_ADDRESS_BUS_SIZE);
+
+	const int n_inputs = N_STD_INPUTS + address_bus_size;
+
+	zvm_begin_module(n_inputs, 8);
+
+	struct zvm_pi inputs[MAX_INPUTS];
+	for (int i = 0; i < n_inputs; i++) inputs[i] = zvm_op_input(i);
+
+	const struct zvm_pi RE = inputs[0];
+	const struct zvm_pi WE = inputs[1];
+	const struct zvm_pi* D = &inputs[2];
+	const struct zvm_pi* A = &inputs[2+8];
 	const int n_pass = address_bus_size - 4;
-	const uint32_t As = A + n_pass;
+	const struct zvm_pi* As = &inputs[2+8+n_pass];
 
-	uint32_t demux = zvm_op_instance(module_id_decode4to16);
-	for (int i = 0; i < 4; i++) zvm_arg(As+i);
+	struct zvm_pi demux = zvm_op_instance(module_id_decode4to16);
+	for (int i = 0; i < 4; i++) zvm_arg(As[i]);
 
-	uint32_t memarr[16];
+	struct zvm_pi memarr[16];
 
 	for (int i = 0; i < 16; i++) {
-		uint32_t select = zvm_op_unpack(i, demux);
-		uint32_t re = op_and(RE, select);
-		uint32_t we = op_and(WE, select);
+		struct zvm_pi select = zvm_pii(demux, i);
+		struct zvm_pi re = op_and(RE, select);
+		struct zvm_pi we = op_and(WE, select);
 		memarr[i] = zvm_op_instance(ram_module_id);
 		zvm_arg(re);
 		zvm_arg(we);
-		for (int j = 0; j < 8; j++) zvm_arg(D+j);
-		for (int j = 0; j < n_pass; j++) zvm_arg(A+j);
+		for (int j = 0; j < 8; j++) zvm_arg(D[j]);
+		for (int j = 0; j < n_pass; j++) zvm_arg(A[j]);
 	}
 
 	for (int i = 0; i < 8; i++) {
-		uint32_t x = 0;
+		struct zvm_pi x = {0};
 		for (int j = 0; j < 16; j++) {
-			uint32_t o = zvm_op_unpack(i, memarr[j]);
+			struct zvm_pi o = zvm_pii(memarr[j], i);
 			x = (j == 0) ? (o) : (op_or(x, o));
 		}
 		zvm_op_output(i, x);
