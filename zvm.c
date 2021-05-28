@@ -2230,18 +2230,17 @@ void zvm_run(int* retvals, int* arguments)
 		switch (op) {
 		case OP(STATEFUL_CALL):
 			mtop()->pc = next_pc; // return address
-			pc = arg[0];
-			mpush(pc, mtop()->reg0 + arg[1], mtop()->state_offset + arg[2]);
-			continue;
+			next_pc = arg[0];
+			mpush(next_pc, mtop()->reg0 + arg[1], mtop()->state_offset + arg[2]);
+			break;;
 		case OP(STATELESS_CALL):
 			mtop()->pc = next_pc; // return address
-			pc = arg[0];
-			mpush(pc, mtop()->reg0 + arg[1], mtop()->state_offset);
-			continue;
+			next_pc = arg[0];
+			mpush(next_pc, mtop()->reg0 + arg[1], mtop()->state_offset);
+			break;
 		case OP(RETURN):
 			if (mpop() >= 0) {
-				pc = mtop()->pc;
-				continue;
+				next_pc = mtop()->pc;
 			} else {
 				g.machine.call_stack_top = 0; // gotcha ya stupid f!%$&
 				executing = 0;
