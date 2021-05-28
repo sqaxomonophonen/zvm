@@ -32,27 +32,71 @@ static uint32_t emit_not()
 	return zvm_end_module();
 }
 
+static void emit_functions()
+{
+	module_id_and = emit_and();
+	module_id_or = emit_or();
+	module_id_not = emit_not();
+}
+
 int main(int argc, char** argv)
 {
 	zvm_init();
 
-	zvm_begin_program();
+	// TEST NOT
+	{
+		zvm_begin_program();
+		emit_functions();
+		zvm_end_program(module_id_not);
 
-	module_id_and = emit_and();
-	module_id_or = emit_or();
-	module_id_not = emit_not();
+		int retvals[100];
+		int arguments[100];
 
-	zvm_end_program(module_id_not);
-
-	int retvals[100];
-	int arguments[100];
-
-	for (int input = 0; input <= 1; input++) {
-		arguments[0] = input;
-		zvm_run(retvals, arguments);
-		printf("NOT(%d) = %d\n", input, retvals[0]);
-		zvm_assert((retvals[0] == !input) && "test fail");
+		for (int input = 0; input <= 1; input++) {
+			arguments[0] = input;
+			zvm_run(retvals, arguments);
+			printf("NOT(%d) = %d\n", input, retvals[0]);
+			zvm_assert((retvals[0] == !input) && "test fail");
+		}
 	}
+
+	// TEST AND
+	{
+		zvm_begin_program();
+		emit_functions();
+		zvm_end_program(module_id_and);
+
+		int retvals[100];
+		int arguments[100];
+
+		for (int input = 0; input < 4; input++) {
+			int x = arguments[0] = input & 1;
+			int y = arguments[1] = input >> 1;
+			zvm_run(retvals, arguments);
+			printf("AND(%d,%d) = %d\n", x, y, retvals[0]);
+			zvm_assert((retvals[0] == (x&&y)) && "test fail");
+		}
+	}
+
+	// TEST OR
+	{
+		zvm_begin_program();
+		emit_functions();
+		zvm_end_program(module_id_or);
+
+		int retvals[100];
+		int arguments[100];
+
+		for (int input = 0; input < 4; input++) {
+			int x = arguments[0] = input & 1;
+			int y = arguments[1] = input >> 1;
+			zvm_run(retvals, arguments);
+			printf("OR(%d,%d) = %d\n", x, y, retvals[0]);
+			zvm_assert((retvals[0] == (x||y)) && "test fail");
+		}
+	}
+
+	printf("IT'S OK!\n");
 
 	return EXIT_SUCCESS;
 }
