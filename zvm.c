@@ -354,7 +354,7 @@ static uint32_t* get_outcome_index_input_dep_bs32(struct module* mod, uint32_t o
 	}
 }
 
-static inline int get_op_n_inputs(uint32_t nodecode)
+static inline int get_nodecode_n_inputs(uint32_t nodecode)
 {
 	const int op = ZVM_OP_DECODE_X(nodecode);
 	if (op == ZVM_OP(INSTANCE)) {
@@ -371,13 +371,13 @@ static inline int get_op_n_inputs(uint32_t nodecode)
 #if 0
 static inline int zvm__is_valid_arg_index(uint32_t x, int index)
 {
-	return 0 <= index && index < get_op_n_inputs(zvm__buf[x]);
+	return 0 <= index && index < get_nodecode_n_inputs(zvm__buf[x]);
 }
 #endif
 
 static int get_op_length(uint32_t p)
 {
-	return 1+(get_op_n_inputs(*bufp(p))<<1);
+	return 1+(get_nodecode_n_inputs(*bufp(p))<<1);
 }
 
 static int get_op_n_outputs(uint32_t p)
@@ -493,7 +493,7 @@ static void trace(struct tracer* tr, struct zvm_pi pi)
 	} else if (op == ZVM_OP(UNIT_DELAY)) {
 		// unit delays have no dependencies
 	} else {
-		const int n_inputs = get_op_n_inputs(nodecode);
+		const int n_inputs = get_nodecode_n_inputs(nodecode);
 		for (int input = 0; input < n_inputs; input++) {
 			trace(tr, argpi(pi.p, input));
 		}
