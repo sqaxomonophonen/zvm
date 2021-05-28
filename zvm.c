@@ -1839,8 +1839,6 @@ static void emit_functions()
 
 void zvm_end_program(uint32_t main_module_id)
 {
-	int buf_sz_after_end_program = buftop();
-
 	g.main_module_id = main_module_id;
 	struct module* mod = &g.modules[main_module_id];
 
@@ -1881,7 +1879,9 @@ void zvm_end_program(uint32_t main_module_id)
 
 		printf("\n");
 	}
-	printf("buf sz after end program:        %d\n", buf_sz_after_end_program);
+
+	printf("input sz:        %d\n", buftop());
+	printf("bytecode sz:     %d\n", zvm_arrlen(g.bytecode));
 	printf("=======================================\n");
 	#endif
 }
