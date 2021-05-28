@@ -2232,7 +2232,7 @@ void zvm_run(int* retvals, int* arguments)
 			mtop()->pc = next_pc; // return address
 			pc = arg[0];
 			mpush(pc, mtop()->reg0 + arg[1], mtop()->state_offset + arg[2]);
-			break;
+			continue;
 		case OP(STATELESS_CALL):
 			mtop()->pc = next_pc; // return address
 			pc = arg[0];
