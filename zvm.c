@@ -83,6 +83,7 @@ struct call_stack_entry {
 
 struct machine {
 	int* registers;
+	int* state;
 	struct call_stack_entry* call_stack;
 	int call_stack_top;
 };
@@ -2122,15 +2123,18 @@ void zvm_end_program(uint32_t main_module_id)
 
 #define N_REGISTERS (1<<16)
 #define CALL_STACK_SIZE (1<<8)
+#define STATE_SZ (1<<20)
 
 static void machine_init()
 {
 	struct machine* m = &g.machine;
 
 	zvm_arrsetlen(m->registers, N_REGISTERS);
+	zvm_arrsetlen(m->state, STATE_SZ);
 	zvm_arrsetlen(m->call_stack, CALL_STACK_SIZE);
 
 	memset(m->registers, 0, N_REGISTERS * sizeof(*m->registers));
+	memset(m->state, 0, STATE_SZ * sizeof(*m->state));
 	memset(m->call_stack, 0, CALL_STACK_SIZE * sizeof(*m->call_stack));
 }
 
@@ -2165,6 +2169,16 @@ static inline int reg_read(int index)
 static inline void reg_write(int index, int value)
 {
 	g.machine.registers[mtop()->reg0 + index] = !!value;
+}
+
+static inline int st_read(int index)
+{
+	return g.machine.state[mtop()->state_offset + index];
+}
+
+static inline void st_write(int index, int value)
+{
+	g.machine.state[mtop()->state_offset + index] = !!value;
 }
 
 static void exec_a21(int aop, uint32_t dst_reg, uint32_t src0_reg, uint32_t src1_reg)
@@ -2256,10 +2270,10 @@ void zvm_run(int* retvals, int* arguments)
 			reg_write(arg[0], reg_read(arg[1]));
 			break;
 		case OP(WRITE):
-			zvm_assert(!"TODO");
+			st_write(arg[0], reg_read(arg[1]));
 			break;
 		case OP(READ):
-			zvm_assert(!"TODO");
+			reg_write(arg[0], st_read(arg[1]));
 			break;
 		case OP(LOADIMM):
 			zvm_assert(!"TODO");
