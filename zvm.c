@@ -1583,6 +1583,7 @@ static int get_state_index(struct module* mod, uint32_t p)
 
 #define OPS \
 	\
+	DEFOP(NIL,0) \
 	DEFOP(STATEFUL_CALL,3) \
 	DEFOP(STATELESS_CALL,2) \
 	DEFOP(RETURN,0) \
@@ -1591,16 +1592,15 @@ static int get_state_index(struct module* mod, uint32_t p)
 	DEFOP(MOVE,2) \
 	DEFOP(WRITE,2) \
 	DEFOP(READ,2) \
-	DEFOP(LOADIMM,2)
+	DEFOP(LOADIMM,2) \
+	DEFOP(N,0)
 
 #define OP(op) OP_##op
 
 enum ops {
-	OP_NIL = 0,
 	#define DEFOP(op,narg) OP(op),
 	OPS
 	#undef DEFOP
-	OP_N
 };
 
 static void emit1(uint32_t x0)
@@ -1690,12 +1690,12 @@ static uint32_t fn_trace_rec(struct fn_tracer* ft, struct zvm_pi pi)
 		uint32_t src0_reg = fn_trace_rec(ft, argpi(pi.p, 0));
 		uint32_t src1_reg = fn_trace_rec(ft, argpi(pi.p, 1));
 		uint32_t dst_reg = fn_tracer_alloc_register(ft);
-		emit4(nodecode, dst_reg, src0_reg, src1_reg); // assuming same encoding for arithmetic ops
+		emit4(ZVM_OP_ENCODE_XY(OP(A21), ZVM_OP_DECODE_Y(nodecode)), dst_reg, src0_reg, src1_reg);
 		return dst_reg;
 	} else if (op == ZVM_OP(A11)) {
 		uint32_t src_reg = fn_trace_rec(ft, argpi(pi.p, 0));
 		uint32_t dst_reg = fn_tracer_alloc_register(ft);
-		emit3(nodecode, dst_reg, src_reg); // assuming same encoding for arithmetic ops
+		emit3(ZVM_OP_ENCODE_XY(OP(A21), ZVM_OP_DECODE_Y(nodecode)), dst_reg, src_reg);
 		return dst_reg;
 	} else if (op == ZVM_OP(UNIT_DELAY)) {
 		uint32_t dst_reg = fn_tracer_alloc_register(ft);
@@ -1716,6 +1716,16 @@ static uint32_t fn_trace(struct fn_tracer* ft, struct zvm_pi pi)
 	return fn_trace_rec(ft, pi);
 }
 
+static int get_function_retval_register_for_output(struct function* fn, int output_index)
+{
+	return output_index; // XXX FIXME wrong
+}
+
+static int get_function_argument_register_for_input(struct function* fn, int input_index)
+{
+	return input_index; // XXX FIXME wrong
+}
+
 static void emit_function_bytecode(uint32_t function_id)
 {
 	struct function* fn = &g.functions[function_id];
@@ -1729,6 +1739,7 @@ static void emit_function_bytecode(uint32_t function_id)
 	struct fn_tracer ft;
 	fn_tracer_init(&ft, mod);
 
+	// resolve call/state-write steps...
 	for (int i = 0; i < sb->n_steps; i++) {
 		struct step* step = &g.steps[sb->steps_i + i];
 
@@ -1803,6 +1814,17 @@ static void emit_function_bytecode(uint32_t function_id)
 
 			bs32s_restore_len();
 		}
+	}
+
+	// resolve outputs...
+	for (int output_index = 0; output_index < mod->n_outputs; output_index++) {
+		if (!outcome_request_output_test(sb->key.outcome_request_bs32i, output_index)) {
+			continue;
+		}
+		struct zvm_pi output = g.outputs[mod->outputs_i + output_index];
+		uint32_t src_reg = fn_trace(&ft, output);
+		uint32_t out_reg = get_function_retval_register_for_output(fn, output_index);
+		emit3(OP(MOVE), out_reg, src_reg);
 	}
 
 	emit1(OP(RETURN));
