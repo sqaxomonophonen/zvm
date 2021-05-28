@@ -1699,8 +1699,7 @@ static uint32_t fn_trace_rec(struct fn_tracer* ft, struct zvm_pi pi)
 		return dst_reg;
 	} else if (op == ZVM_OP(UNIT_DELAY)) {
 		uint32_t dst_reg = fn_tracer_alloc_register(ft);
-		uint32_t state_index = 0; // XXX where do I find state index ?
-		emit3(OP(READ), dst_reg, state_index);
+		emit3(OP(READ), dst_reg, get_state_index(ft->mod, pi.p));
 		return dst_reg;
 	} else if (op == ZVM_OP(INSTANCE)) {
 		zvm_assert(!"expected instance node output to already be populated");
