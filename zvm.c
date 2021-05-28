@@ -29,13 +29,8 @@ struct module {
 	uint32_t node_output_map_i;
 	uint32_t node_output_bs32i;
 
-	uint32_t unit_delay_index_map_i;
-	uint32_t unit_delay_index_map_n;
-};
-
-struct unit_delay_index {
-	uint32_t p;
-	uint32_t index;
+	uint32_t state_index_map_i;
+	uint32_t state_index_map_n;
 };
 
 struct substance_key {
@@ -87,7 +82,7 @@ struct globals {
 	struct step* steps;
 	uint32_t* bs32s;
 	uint32_t* bytecode;
-	struct unit_delay_index* unit_delay_index_maps;
+	struct zvm_pi* state_index_maps;
 
 	struct drout* tmp_drains;
 	struct drout* tmp_outcomes;
@@ -578,7 +573,7 @@ int zvm_end_module()
 
 	struct zvm_pi* np = NULL;
 
-	mod->unit_delay_index_map_i = zvm_arrlen(g.unit_delay_index_maps);
+	mod->state_index_map_i = zvm_arrlen(g.state_index_maps);
 
 	for (int pass = 0; pass < 2; pass++) {
 		int n_nodes_total = 0;
@@ -601,14 +596,15 @@ int zvm_end_module()
 					*output = argpi(p, 0);
 				} else if (op == ZVM_OP(UNIT_DELAY)) {
 					mod->n_bits++; // XXX might not be connected?
-					struct unit_delay_index x = {
-						.p = p,
-						.index = mod->unit_delay_index_map_n++,
-					};
-					zvm_arrpush(g.unit_delay_index_maps, x);
+					zvm_arrpush(g.state_index_maps, zvm_pi(p, mod->state_index_map_n));
+					mod->state_index_map_n++;
 				} else if (op == ZVM_OP(INSTANCE)) {
 					struct module* instance_mod = get_instance_mod_for_code(code);
 					mod->n_bits += instance_mod->n_bits; // XXX might not be connected?
+					if (instance_mod->n_bits > 0) {
+						zvm_arrpush(g.state_index_maps, zvm_pi(p, mod->state_index_map_n));
+						mod->state_index_map_n++;
+					}
 				}
 			}
 
@@ -1563,23 +1559,24 @@ static void clear_substance_tags()
 	}
 }
 
-static int get_unit_delay_index(struct module* mod, uint32_t p)
+static int get_state_index(struct module* mod, uint32_t p)
 {
-	struct unit_delay_index* xs = &g.unit_delay_index_maps[mod->unit_delay_index_map_i];
+	struct zvm_pi* xs = &g.state_index_maps[mod->state_index_map_i];
 	int left = 0;
-	int right = mod->unit_delay_index_map_n - 1;
+	int right = mod->state_index_map_n - 1;
 	while (left <= right) {
 		int mid = (left+right) >> 1;
-		uint32_t t = xs[mid].p;
+		struct zvm_pi x = xs[mid];
+		uint32_t t = x.p;
 		if (t < p) {
 			left = mid + 1;
 		} else if (t > p) {
 			right = mid - 1;
 		} else {
-			return mid;
+			return x.i;
 		}
 	}
-	zvm_assert(!"unit delay p not found");
+	zvm_assert(!"state p not found");
 }
 
 #define OPS \
@@ -1738,7 +1735,7 @@ static void emit_function_code(uint32_t function_id)
 
 		if (is_unit_delay) {
 			uint32_t src_reg = fn_trace(&ft, argpi(step->p, 0));
-			emit3(OP(WRITE), get_unit_delay_index(mod, step->p), src_reg);
+			emit3(OP(WRITE), get_state_index(mod, step->p), src_reg);
 		} else {
 			uint32_t call_function_id = resolve_function_id_for_substance_id(step->substance_id);
 			zvm_assert((call_function_id < function_id) && "call to function not yet emitted");
@@ -1792,8 +1789,7 @@ static void emit_function_code(uint32_t function_id)
 
 			uint32_t pc = g.functions[function_id].bytecode_i;
 			if (stateful_call) {
-				uint32_t state_offset = 0; // XXX how to calculate?
-				emit4(OP(STATEFUL_CALL), pc, reg_base, state_offset);
+				emit4(OP(STATEFUL_CALL), pc, reg_base, get_state_index(mod, step->p));
 			} else {
 				emit3(OP(STATELESS_CALL), pc, reg_base);
 			}
