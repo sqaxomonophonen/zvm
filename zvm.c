@@ -596,11 +596,11 @@ int zvm_end_module()
 					zvm_assert(is_pi_placeholder(*output) && "double assignment");
 					*output = argpi(p, 0);
 				} else if (op == ZVM_OP(UNIT_DELAY)) {
-					mod->n_bits++; // XXX might not be connected?
+					mod->n_bits++;
 					zvm_arrpush(g.state_index_maps, zvm_pi(p, next_state_index++));
 				} else if (op == ZVM_OP(INSTANCE)) {
 					struct module* instance_mod = get_instance_mod_for_code(code);
-					mod->n_bits += instance_mod->n_bits; // XXX might not be connected?
+					mod->n_bits += instance_mod->n_bits;
 					if (instance_mod->n_bits > 0) {
 						zvm_arrpush(g.state_index_maps, zvm_pi(p, next_state_index));
 						next_state_index += instance_mod->n_bits;
