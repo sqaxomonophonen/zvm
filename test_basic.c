@@ -140,7 +140,7 @@ int main(int argc, char** argv)
 		}
 	}
 
-	printf("IT'S OK!\n");
+	printf("\nIT IS OK!\n");
 
 	return EXIT_SUCCESS;
 }
