@@ -1992,6 +1992,54 @@ static const char* get_a11_name(uint32_t code)
 	return NULL;
 }
 
+static int disasm_pc(int pc)
+{
+	uint32_t bytecode = g.bytecode[pc];
+	uint32_t op = ZVM_OP_DECODE_X(bytecode);
+
+	printf("pc=%.6x   ", pc);
+	int len = get_bytecode_op_length(bytecode);
+	const int max_len = 4;
+	zvm_assert(len <= max_len);
+	for (int i = 0; i < max_len; i++) {
+		if (i < len) {
+			printf(" %.8x", g.bytecode[pc+i]);
+		} else {
+			printf("         ");
+		}
+	}
+
+	printf("    ");
+
+	uint32_t* args = &g.bytecode[pc+1];
+
+	printf("%s", get_bytecode_op_name(bytecode));
+	if (op == OP(A21)) {
+		printf(":%s", get_a21_name(bytecode));
+	} else if (op == OP(A11)) {
+		printf(":%s", get_a11_name(bytecode));
+	}
+
+	printf("(");
+	switch (op) {
+	case OP(STATEFUL_CALL): printf("pc=%.6x, regbase=%d, stbase=%d", args[0], args[1], args[2]); break;
+	case OP(STATELESS_CALL): printf("pc=%.6x, regbase=%d", args[0], args[1]); break;
+	case OP(RETURN): break;
+	case OP(A21): printf("dst=r%d, src0=r%d, src1=r%d", args[0], args[1], args[2]); break;
+	case OP(A11): printf("dst=r%d, src=r%d", args[0], args[1]); break;
+	case OP(MOVE): printf("dst=r%d, src=r%d", args[0], args[1]); break;
+	case OP(WRITE): printf("st=%d, src=r%d", args[0], args[1]); break;
+	case OP(READ): printf("dst=r%d, st=%d", args[0], args[1]); break;
+	case OP(LOADIMM): printf("dst=r%d, imm=%d", args[0], args[1]); break;
+	default: zvm_assert(!"unhandled op");
+	}
+
+	printf(")");
+	printf("\n");
+
+	return pc + len;
+}
+
 static void disasm_function_id(int function_id)
 {
 	struct function* fn = &g.functions[function_id];
@@ -2005,50 +2053,7 @@ static void disasm_function_id(int function_id)
 
 	uint32_t pc = fn->bytecode_i;
 	while (pc < bytecode_end) {
-		uint32_t bytecode = g.bytecode[pc];
-		uint32_t op = ZVM_OP_DECODE_X(bytecode);
-
-		printf("pc=%.6x   ", pc);
-		int len = get_bytecode_op_length(bytecode);
-		const int max_len = 4;
-		zvm_assert(len <= max_len);
-		for (int i = 0; i < max_len; i++) {
-			if (i < len) {
-				printf(" %.8x", g.bytecode[pc+i]);
-			} else {
-				printf("         ");
-			}
-		}
-
-		printf("    ");
-
-		uint32_t* args = &g.bytecode[pc+1];
-
-		printf("%s", get_bytecode_op_name(bytecode));
-		if (op == OP(A21)) {
-			printf(":%s", get_a21_name(bytecode));
-		} else if (op == OP(A11)) {
-			printf(":%s", get_a11_name(bytecode));
-		}
-
-		printf("(");
-		switch (op) {
-		case OP(STATEFUL_CALL): printf("pc=%.6x, regbase=%d, stbase=%d", args[0], args[1], args[2]); break;
-		case OP(STATELESS_CALL): printf("pc=%.6x, regbase=%d", args[0], args[1]); break;
-		case OP(RETURN): break;
-		case OP(A21): printf("dst=r%d, src0=r%d, src1=r%d", args[0], args[1], args[2]); break;
-		case OP(A11): printf("dst=r%d, src=r%d", args[0], args[1]); break;
-		case OP(MOVE): printf("dst=r%d, src=r%d", args[0], args[1]); break;
-		case OP(WRITE): printf("st=%d, src=r%d", args[0], args[1]); break;
-		case OP(READ): printf("dst=r%d, st=%d", args[0], args[1]); break;
-		case OP(LOADIMM): printf("dst=r%d, imm=%d", args[0], args[1]); break;
-		default: zvm_assert(!"unhandled op");
-		}
-
-		printf(")");
-		printf("\n");
-
-		pc += len;
+		pc = disasm_pc(pc);
 	}
 }
 
@@ -2197,7 +2202,7 @@ void zvm_run(int* retvals, int* arguments)
 		}
 	}
 
-	uint32_t pc = main_function->bytecode_i;
+	int pc = main_function->bytecode_i;
 
 	//struct machine* machine = &g.machine;
 
@@ -2205,6 +2210,11 @@ void zvm_run(int* retvals, int* arguments)
 	int iteration = 0;
 	while (executing) {
 		iteration++;
+
+		#if 0
+		printf("i:%.8d ", iteration);
+		disasm_pc(pc);
+		#endif
 
 		uint32_t bytecode = g.bytecode[pc];
 
@@ -2259,8 +2269,10 @@ void zvm_run(int* retvals, int* arguments)
 		pc = next_pc;
 	}
 
+	#if 0
 	#ifdef VERBOSE_DEBUG
 	printf("run took %d iterations\n", iteration);
+	#endif
 	#endif
 
 	if (retvals != NULL) {
