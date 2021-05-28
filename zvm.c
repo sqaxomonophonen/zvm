@@ -1991,7 +1991,10 @@ static void disasm_function_id(int function_id)
 	uint32_t bytecode_end = fn->bytecode_i + fn->bytecode_n;
 
 	printf("\n");
-	printf("; function %d  //  n_args=%d  n_retvals=%d  //  range %.6x - %.6x\n", function_id, fn->n_arguments, fn->n_retvals, fn->bytecode_i, bytecode_end);
+	printf("; F%d:S%d:M%d //  n_args=%d  n_retvals=%d  //  range %.6x - %.6x\n",
+		function_id, fn->substance_id, g.substances[fn->substance_id].key.module_id,
+		fn->n_arguments, fn->n_retvals,
+		fn->bytecode_i, bytecode_end);
 
 	uint32_t pc = fn->bytecode_i;
 	while (pc < bytecode_end) {
