@@ -1876,7 +1876,7 @@ static void emit_function_bytecode(uint32_t function_id)
 				emit3(OP(MOVE), arg_reg, src_reg);
 			}
 
-			uint32_t pc = g.functions[function_id].bytecode_i;
+			uint32_t pc = g.functions[call_function_id].bytecode_i;
 			if (stateful_call) {
 				emit4(OP(STATEFUL_CALL), pc, reg_base, get_state_index(mod, step->p));
 			} else {
