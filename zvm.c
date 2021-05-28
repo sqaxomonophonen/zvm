@@ -382,7 +382,7 @@ static inline int zvm__is_valid_arg_index(uint32_t x, int index)
 
 static int get_op_length(uint32_t p)
 {
-	return 1+get_op_n_inputs(*bufp(p));
+	return 1+(get_op_n_inputs(*bufp(p))<<1);
 }
 
 static int get_op_n_outputs(uint32_t p)
@@ -558,6 +558,11 @@ static uint32_t module_alloc_node_output_bs32(struct module* mod)
 	return bs32_alloc(mod->n_node_outputs);
 }
 
+static int is_pi_placeholder(struct zvm_pi pi)
+{
+	return pi.p == ZVM_PLACEHOLDER && pi.i == ZVM_PLACEHOLDER;
+}
+
 int zvm_end_module()
 {
 	struct module* mod = ZVM_MOD;
@@ -592,8 +597,8 @@ int zvm_end_module()
 					int output_index = ZVM_OP_DECODE_Y(code);
 					zvm_assert(0 <= output_index && output_index < mod->n_outputs);
 					struct zvm_pi* output = &g.outputs[mod->outputs_i + output_index];
-					zvm_assert((output->p == ZVM_PLACEHOLDER) && "double assignment");
-					output->p = *bufp(zvm__arg_index(p, 0));
+					zvm_assert(is_pi_placeholder(*output) && "double assignment");
+					*output = argpi(p, 0);
 				} else if (op == ZVM_OP(UNIT_DELAY)) {
 					mod->n_bits++; // XXX might not be connected?
 					struct unit_delay_index x = {
@@ -861,17 +866,17 @@ static void add_drain(uint32_t substance_id, uint32_t p, int index)
 	trace(&tr, pp);
 }
 
-static void drain_to_output_instance_output_visitor_count(struct tracer* tr, uint32_t p, int output_index)
+static void drain_to_output_instance_output_visitor_count(struct tracer* tr, struct zvm_pi pi)
 {
 	struct drout* drain = tr->usr;
 	drain->counter++;
-	struct drout* outcome = drout_find(g.tmp_outcomes, zvm_arrlen(g.tmp_outcomes), p, output_index);
+	struct drout* outcome = drout_find(g.tmp_outcomes, zvm_arrlen(g.tmp_outcomes), pi.p, pi.i);
 	outcome->decr_list_n++;
 }
 
-static void drain_to_output_instance_output_visitor_write(struct tracer* tr, uint32_t p, int output_index)
+static void drain_to_output_instance_output_visitor_write(struct tracer* tr, struct zvm_pi pi)
 {
-	struct drout* outcome = drout_find(g.tmp_outcomes, zvm_arrlen(g.tmp_outcomes), p, output_index);
+	struct drout* outcome = drout_find(g.tmp_outcomes, zvm_arrlen(g.tmp_outcomes), pi.p, pi.i);
 	g.tmp_decr_lists[outcome->decr_list_i + outcome->decr_list_n++] = *(uint32_t*)tr->usr;
 }
 
@@ -923,7 +928,7 @@ static int queue_outcome_closing_compar(const void* va, const void* vb)
 
 static int queue_outcome_get_pspan_length(uint32_t* queue, int n, int break_on_drain)
 {
-	uint32_t p0 = ZVM_NIL_P;
+	uint32_t p0 = ZVM_NIL;
 	for (int i = 0; i < n; i++) {
 		uint32_t qv = queue[i];
 		int is_outcome = IS_OUTCOME(qv);
@@ -935,7 +940,7 @@ static int queue_outcome_get_pspan_length(uint32_t* queue, int n, int break_on_d
 			zvm_assert(is_outcome);
 		}
 		struct drout* outcome = &g.tmp_outcomes[GET_VALUE(qv)];
-		if (p0 == ZVM_NIL_P) {
+		if (p0 == ZVM_NIL) {
 			p0 = outcome->p;
 		} else if (outcome->p != p0) {
 			return i;
@@ -975,7 +980,7 @@ static int ack_substance(uint32_t p, uint32_t queue_i, int n, int* queue_np, int
 		uint32_t outcome_index = GET_VALUE(qv);
 		struct drout* outcome = &g.tmp_outcomes[outcome_index];
 		zvm_assert(outcome->p == p);
-		if (outcome->index == ZVM_NIL_ID) {
+		if (outcome->index == ZVM_NIL) {
 			outcome_request_state_set(key.outcome_request_bs32i);
 		} else {
 			outcome_request_output_set(key.outcome_request_bs32i, outcome->index);
@@ -1026,7 +1031,7 @@ static void process_substance(uint32_t substance_id)
 			if (!outcome_request_output_test(key.outcome_request_bs32i, output_index)) {
 				continue;
 			}
-			add_drain(substance_id, ZVM_NIL_P, output_index);
+			add_drain(substance_id, ZVM_NIL, output_index);
 		}
 
 		if (outcome_request_state_test(key.outcome_request_bs32i)) {
@@ -1115,7 +1120,7 @@ static void process_substance(uint32_t substance_id)
 				const int op = ZVM_OP_DECODE_X(code);
 				if (op == ZVM_OP(INSTANCE)) {
 					if (module_has_state(get_instance_mod_for_code(code))) {
-						push_outcome(p, ZVM_NIL_ID);
+						push_outcome(p, ZVM_NIL);
 					}
 				}
 				p += get_op_length(p);
@@ -1166,11 +1171,11 @@ static void process_substance(uint32_t substance_id)
 				tr.instance_output_visitor = drain_to_output_instance_output_visitor_write;
 				tr.usr = &i;
 			}
-			uint32_t p = (drain->p == ZVM_NIL_P)
-				? g.outputs[mod->outputs_i + drain->index].p
-				: *bufp(zvm__arg_index(drain->p, drain->index));
+			struct zvm_pi pi = (drain->p == ZVM_NIL)
+				? g.outputs[mod->outputs_i + drain->index]
+				: argpi(drain->p, drain->index);
 			clear_node_visit_set(mod);
-			trace(&tr, p);
+			trace(&tr, pi);
 		}
 
 		for (int i = 0; i < n_outcomes; i++) {
@@ -1242,12 +1247,12 @@ static void process_substance(uint32_t substance_id)
 		}
 
 		uint32_t index = outcome->index;
-		if (index != ZVM_NIL_ID) {
+		if (index != ZVM_NIL) {
 			// mark instance outcome nodes in visit set;
 			// used to detect if a sequence of instance
 			// output outcomes constitute a "non-fragmented
 			// call"
-			visit_node(mod, outcome->p, index);
+			visit_node(mod, zvm_pi(outcome->p, index));
 		}
 	}
 
@@ -1340,13 +1345,13 @@ static void process_substance(uint32_t substance_id)
 
 				uint32_t expected_drout_index = 0;
 				if (is_output) {
-					int node_index = get_node_index(mod, &((struct node_output) { .p = p0, .index = j}));
+					int node_index = get_node_index(mod, zvm_pi(p0,j));
 					if (!bs32_test(node_bs32, node_index)) {
 						continue;
 					}
 					expected_drout_index = j;
 				} else if (is_state) {
-					expected_drout_index = ZVM_NIL_ID;
+					expected_drout_index = ZVM_NIL;
 				} else {
 					zvm_assert(!"unreachable");
 				}
@@ -1415,7 +1420,7 @@ static void process_substance(uint32_t substance_id)
 			// makes it easier to enforce that state is never
 			// written before the last read
 			struct drout* last_outcome = &g.tmp_outcomes[GET_VALUE(g.tmp_queue[queue_i + pspan_length - 1])];
-			if (last_outcome->index == ZVM_NIL_ID) {
+			if (last_outcome->index == ZVM_NIL) {
 				struct module* instance_mod = get_instance_mod_at_p(p0);
 				int requesting_state = module_has_state(instance_mod) && outcome_request_state_test(key.outcome_request_bs32i);
 				zvm_assert(requesting_state && "found state outcome but not requesting state?");
@@ -1424,7 +1429,7 @@ static void process_substance(uint32_t substance_id)
 
 			#ifdef DEBUG
 			for (int i = 0; i < pspan_length; i++) {
-				zvm_assert((g.tmp_outcomes[GET_VALUE(g.tmp_queue[queue_i + i])].index != ZVM_NIL_ID) && "state outcome not allowed at this point");
+				zvm_assert((g.tmp_outcomes[GET_VALUE(g.tmp_queue[queue_i + i])].index != ZVM_NIL) && "state outcome not allowed at this point");
 			}
 			#endif
 
@@ -1455,12 +1460,11 @@ static void process_substance(uint32_t substance_id)
 			uint32_t v = GET_VALUE(qv);
 			struct drout* drain = &g.tmp_drains[v];
 			uint32_t p = drain->p;
-			if (p != ZVM_NIL_P) {
-				zvm_assert(!ZVM_IS_SPECIAL(p));
+			if (p != ZVM_NIL) {
 				uint32_t code = *bufp(p);
 				const int op = ZVM_OP_DECODE_X(code);
 				if (op == ZVM_OP(UNIT_DELAY)) {
-					push_step(p, ZVM_NIL_ID);
+					push_step(p, ZVM_NIL);
 				}
 			}
 			queue_i++;
@@ -1519,7 +1523,7 @@ static void emit_functions_rec(int substance_id)
 	const int n_steps = sb->n_steps;
 	for (int i = 0; i < n_steps; i++) {
 		struct step* step = &g.steps[sb->steps_i + i];
-		if (step->substance_id == ZVM_NIL_ID) {
+		if (step->substance_id == ZVM_NIL) {
 			continue;
 		}
 		emit_functions_rec(step->substance_id);
@@ -1667,64 +1671,32 @@ static void fn_tracer_hawk_registers(struct fn_tracer* ft, int n)
 	ft->next_register += n;
 }
 
-static uint32_t fn_trace_rec(struct fn_tracer* ft, uint32_t p, int unpack_index)
+static uint32_t fn_trace_rec(struct fn_tracer* ft, struct zvm_pi pi)
 {
-	if (ZVM_IS_SPECIALX(p, ZVM_X_CONST)) {
-		zvm_assert((unpack_index == -1) && "unexpected unpack");
-		uint32_t v = 0;
-		if (p == ZVM_ZERO) {
-			v = 0;
-		} else if (p == ZVM_ONE) {
-			v = 1;
-		} else {
-			zvm_assert(!"unhandled const");
-		}
-		uint32_t dst = fn_tracer_alloc_register(ft);
-		// XXX register ought to be stored in node output map, but a
-		// CONST has no node... possible solutions:
-		//  - don't use SPECIAL values for constants on "the outside",
-		//    but promote them to actual nodes
-		//  - have special one/zero const registers (some real
-		//    architectures have a register that's always zero)
-		//  - alloc constant registers on demand, once per constant,
-		//    and store them somewhere in fn_tracer; there are only two
-		//    possible constant values (0/1) at this point
-		//  - ignore it and save it for later optimization?
-		emit3(OP(LOADIMM), dst, v);
-		return dst;
-	}
 
-	if (ZVM_IS_SPECIALX(p, ZVM_X_INPUT)) {
-		zvm_assert((unpack_index == -1) && "unexpected unpack");
-		return 0; // XXX how do I find the input register?
-	}
+	zvm_assert((ft->mod->code_begin_p <= pi.p && pi.p < ft->mod->code_end_p) && "p out of range");
 
-	assert(!ZVM_IS_SPECIAL(p));
-
-	zvm_assert((ft->mod->code_begin_p <= p && p < ft->mod->code_end_p) && "p out of range");
-
-	int node_output_index = (unpack_index == -1) ? 0 : unpack_index;
-	zvm_assert(node_output_index >= 0);
-	uint32_t stored_reg = node_output_map_get(ft->mod, &(struct node_output) { .p = p, .index = node_output_index });
-	if (stored_reg != ZVM_NIL_ID) {
+	uint32_t stored_reg = node_output_map_get(ft->mod, pi);
+	if (stored_reg != ZVM_NIL) {
 		return stored_reg;
 	}
 
-	uint32_t code = *bufp(p);
+	uint32_t code = *bufp(pi.p);
 	const int op = ZVM_OP_DECODE_X(code);
 
-	if (op == ZVM_OP(UNPACK)) {
-		zvm_assert((unpack_index == -1) && "double unpack");
-		return fn_trace_rec(ft, *bufp(zvm__arg_index(p, 0)), ZVM_OP_DECODE_Y(code));
+	if (op == ZVM_OP(CONST)) {
+		uint32_t dst = fn_tracer_alloc_register(ft);
+		emit3(OP(LOADIMM), dst, ZVM_OP_DECODE_Y(code));
+		return dst;
+	} else if (op == ZVM_OP(INPUT)) {
+		return 0; // XXX
 	} else if (op == ZVM_OP(A21)) {
-		zvm_assert((unpack_index == -1) && "unexpected unpack");
-		uint32_t src0_reg = fn_trace_rec(ft, *bufp(zvm__arg_index(p, 0)), -1);
-		uint32_t src1_reg = fn_trace_rec(ft, *bufp(zvm__arg_index(p, 1)), -1);
+		uint32_t src0_reg = fn_trace_rec(ft, argpi(pi.p, 0));
+		uint32_t src1_reg = fn_trace_rec(ft, argpi(pi.p, 1));
 		uint32_t dst_reg = fn_tracer_alloc_register(ft);
 		emit4(OP(ARITH_2_1), dst_reg, src0_reg, src1_reg); // XXX NOR where?
 		return dst_reg;
 	} else if (op == ZVM_OP(UNIT_DELAY)) {
-		zvm_assert((unpack_index == -1) && "unexpected unpack");
 		uint32_t dst_reg = fn_tracer_alloc_register(ft);
 		uint32_t state_index = 0; // XXX where do I find state index ?
 		emit3(OP(READ), dst_reg, state_index);
@@ -1739,9 +1711,9 @@ static uint32_t fn_trace_rec(struct fn_tracer* ft, uint32_t p, int unpack_index)
 	return 0;
 }
 
-static uint32_t fn_trace(struct fn_tracer* ft, uint32_t p)
+static uint32_t fn_trace(struct fn_tracer* ft, struct zvm_pi pi)
 {
-	return fn_trace_rec(ft, p, -1);
+	return fn_trace_rec(ft, pi);
 }
 
 static void emit_function_code(uint32_t function_id)
@@ -1752,7 +1724,7 @@ static void emit_function_code(uint32_t function_id)
 	struct substance* sb = &g.substances[fn->substance_id];
 	struct module* mod = &g.modules[sb->key.module_id];
 
-	node_output_map_fill(mod, ZVM_NIL_ID);
+	node_output_map_fill(mod, ZVM_NIL);
 
 	struct fn_tracer ft;
 	fn_tracer_init(&ft, mod);
@@ -1760,10 +1732,10 @@ static void emit_function_code(uint32_t function_id)
 	for (int i = 0; i < sb->n_steps; i++) {
 		struct step* step = &g.steps[sb->steps_i + i];
 
-		const int is_unit_delay = (step->substance_id == ZVM_NIL_ID);
+		const int is_unit_delay = (step->substance_id == ZVM_NIL);
 
 		if (is_unit_delay) {
-			uint32_t src_reg = fn_trace(&ft, *bufp(zvm__arg_index(step->p, 0)));
+			uint32_t src_reg = fn_trace(&ft, argpi(step->p, 0));
 			emit3(OP(WRITE), get_unit_delay_index(mod, step->p), src_reg);
 		} else {
 			uint32_t call_function_id = resolve_function_id_for_substance_id(step->substance_id);
@@ -1800,7 +1772,7 @@ static void emit_function_code(uint32_t function_id)
 
 				// populate return value registers in node output map
 				uint32_t output_reg = reg_base + (n_retvals++);
-				node_output_map_set(mod, &((struct node_output) { .p = step->p, .index = output_index }), output_reg);
+				node_output_map_set(mod, zvm_pi(step->p, output_index), output_reg);
 			}
 			if (outcome_request_state_test(outcome_request_bs32i)) {
 				bs32_union_inplace(n_inputs, input_set_bs32, get_state_input_dep_bs32(step_mod));
@@ -1811,7 +1783,7 @@ static void emit_function_code(uint32_t function_id)
 				if (!bs32_test(input_set_bs32, input_index)) {
 					continue;
 				}
-				uint32_t src_reg = fn_trace(&ft, *bufp(zvm__arg_index(step->p, input_index)));
+				uint32_t src_reg = fn_trace(&ft, argpi(step->p, input_index));
 				uint32_t arg_reg = reg_base + n_retvals + (n_args++);
 				emit3(OP(MOVE), arg_reg, src_reg);
 			}
