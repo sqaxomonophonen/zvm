@@ -203,12 +203,10 @@ int main(int argc, char** argv)
 	printf("\n");
 	#undef MOD
 
-	//zvm_begin_module(0, 0, 0);
-	//uint32_t main_module_id = zvm_end_module();
-
 	zvm_end_program(module_id_ram64k);
 
 	zvm_run(NULL, NULL);
 
 	return EXIT_SUCCESS;
 }
+

@@ -2202,8 +2202,10 @@ void zvm_run(int* retvals, int* arguments)
 	//struct machine* machine = &g.machine;
 
 	int executing = 1;
-	int iterations_remaining = 100;
-	while (executing && iterations_remaining-- > 0) {
+	int iteration = 0;
+	while (executing) {
+		iteration++;
+
 		uint32_t bytecode = g.bytecode[pc];
 
 		uint32_t* arg = &g.bytecode[pc+1];
@@ -2257,7 +2259,9 @@ void zvm_run(int* retvals, int* arguments)
 		pc = next_pc;
 	}
 
-	zvm_assert(iterations_remaining > 0);
+	#ifdef VERBOSE_DEBUG
+	printf("run took %d iterations\n", iteration);
+	#endif
 
 	if (retvals != NULL) {
 		for (int i = 0; i < main_function->n_retvals; i++) {
