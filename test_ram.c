@@ -113,8 +113,7 @@ static uint32_t emit_memory_byte()
 	const struct zvm_pi WE = zvm_op_input(1);
 	for (int i = 0; i < 8; i++) {
 		struct zvm_pi in = zvm_op_input(2+i);
-		struct zvm_pi bit = zvm_op_instance(module_id_memory_bit);
-		bit.i = 0;
+		struct zvm_pi bit = zvm_pii(zvm_op_instance(module_id_memory_bit), 0);
 		zvm_arg(WE);
 		zvm_arg(in);
 		zvm_op_output(i, op_and(RE, bit));
@@ -126,7 +125,7 @@ static uint32_t emit_memory_byte()
 static uint32_t emit_ram16(int address_bus_size, uint32_t ram_module_id)
 {
 	const int MAX_ADDRESS_BUS_SIZE = 16;
-	const int N_STD_INPUTS = 10;
+	const int N_STD_INPUTS = 2+8;
 	const int MAX_INPUTS = N_STD_INPUTS + MAX_ADDRESS_BUS_SIZE;
 	zvm_assert(address_bus_size <= MAX_ADDRESS_BUS_SIZE);
 
@@ -175,10 +174,10 @@ static uint32_t emit_ram16(int address_bus_size, uint32_t ram_module_id)
 int retvals[100];
 int arguments[100];
 
-static void ram_op(int we, int re, int d, int a)
+static void ram_op(int re, int we, int d, int a)
 {
-	arguments[0] = we;
-	arguments[1] = re;
+	arguments[0] = re;
+	arguments[1] = we;
 	for (int i = 0; i < 8; i++) arguments[2+i] = !!(d & (1<<i));
 	for (int i = 0; i < 16; i++) arguments[10+i] = !!(a & (1<<i));
 	zvm_run(retvals, arguments);
@@ -186,12 +185,12 @@ static void ram_op(int we, int re, int d, int a)
 
 static void ram_write(int address, int data)
 {
-	ram_op(1,0,data,address);
+	ram_op(0,1,data,address);
 }
 
 static int ram_read(int address)
 {
-	ram_op(0,1,0,address);
+	ram_op(1,0,0,address);
 	int r = 0;
 	for (int i = 0; i < 8; i++) {
 		r |= retvals[i] << i;
@@ -199,9 +198,9 @@ static int ram_read(int address)
 	return r;
 }
 
-int main(int argc, char** argv)
+static void ramtest(int address_size)
 {
-	zvm_init();
+	printf("ramtest address size %d\n", address_size);
 
 	zvm_begin_program();
 
@@ -230,12 +229,45 @@ int main(int argc, char** argv)
 	printf("\n");
 	#undef MOD
 
-	zvm_end_program(module_id_ram4k);
+	uint32_t mod_id = ZVM_NIL;
+	switch (address_size) {
+	case 0: mod_id = module_id_memory_byte; break;
+	case 4: mod_id = module_id_ram16; break;
+	case 8: mod_id = module_id_ram256; break;
+	case 12: mod_id = module_id_ram4k; break;
+	case 16: mod_id = module_id_ram64k; break;
+	default: zvm_assert(!"unhandled address size");
+	}
+
+	zvm_end_program(mod_id);
 
 	printf("\n");
 
-	ram_write(42, 69);
-	printf("read %d\n", ram_read(42));
+	const int n_addresses = 1 << address_size;
+
+	for (int a = 0; a < n_addresses; a++) {
+		ram_write(a, a*a);
+	}
+	for (int a = 0; a < n_addresses; a++) {
+		zvm_assert(ram_read(a) == ((a*a)&0xff));
+	}
+	for (int a = 0; a < n_addresses; a++) {
+		ram_write(a, 0);
+	}
+	for (int a = 0; a < n_addresses; a++) {
+		zvm_assert(ram_read(a) == 0);
+	}
+}
+
+int main(int argc, char** argv)
+{
+	zvm_init();
+	ramtest(0);
+	ramtest(4);
+	ramtest(8);
+	//ramtest(12);
+
+	printf("YEAH OK\n");
 
 	return EXIT_SUCCESS;
 }
