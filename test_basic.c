@@ -7,6 +7,8 @@ uint32_t module_id_and;
 uint32_t module_id_or;
 uint32_t module_id_not;
 
+uint32_t module_id_memory_bit;
+
 static uint32_t emit_and()
 {
 	zvm_begin_module(2, 1);
@@ -101,6 +103,22 @@ static uint32_t emit_memory_bit()
 	struct zvm_pi dly = zvm_op_unit_delay(ZVM_PI_PLACEHOLDER);
 	zvm_op_output(0, dly);
 	zvm_assign_arg(dly.p, 0, op_or(op_and(op_not(WE), dly), op_and(WE, IN)));
+	return zvm_end_module();
+}
+
+static uint32_t emit_memory_byte()
+{
+	zvm_begin_module(10, 8);
+	const struct zvm_pi RE = zvm_op_input(0);
+	const struct zvm_pi WE = zvm_op_input(1);
+	for (int i = 0; i < 8; i++) {
+		struct zvm_pi in = zvm_op_input(2+i);
+		struct zvm_pi bit = zvm_pii(zvm_op_instance(module_id_memory_bit), 0);
+		zvm_arg(WE);
+		zvm_arg(in);
+		zvm_op_output(i, op_and(RE, bit));
+	}
+
 	return zvm_end_module();
 }
 
@@ -232,6 +250,47 @@ int main(int argc, char** argv)
 		T(1,0,1);
 		T(1,0,0);
 		T(0,0,0);
+	}
+
+	// TEST STATE 2
+	{
+		zvm_begin_program();
+		emit_functions();
+		module_id_memory_bit = emit_memory_bit();
+		zvm_end_program(emit_memory_byte());
+
+		int* RE = &arguments[0];
+		int* WE = &arguments[1];
+		int* DI = &arguments[2];
+		int* DO = &retvals[0];
+
+		for (int i = 0; i < 256; i++) {
+			// write value
+			*RE = 0;
+			*WE = 1;
+			for (int j = 0; j < 8; j++) DI[j] = (i>>j)&1;
+			zvm_run(retvals, arguments);
+			for (int j = 0; j < 8; j++) zvm_assert(DO[j] == 0);
+
+			// read value
+			*RE = 1;
+			*WE = 0;
+			zvm_run(retvals, arguments);
+			for (int j = 0; j < 8; j++) zvm_assert(DO[j] == ((i>>j)&1));
+
+			// read value and write zero
+			*RE = 1;
+			*WE = 1;
+			for (int j = 0; j < 8; j++) DI[j] = 0;
+			zvm_run(retvals, arguments);
+			for (int j = 0; j < 8; j++) zvm_assert(DO[j] == ((i>>j)&1));
+
+			// read zero
+			*RE = 1;
+			*WE = 0;
+			zvm_run(retvals, arguments);
+			for (int j = 0; j < 8; j++) zvm_assert(DO[j] == 0);
+		}
 	}
 
 	printf("\nIT IS OK!\n");
