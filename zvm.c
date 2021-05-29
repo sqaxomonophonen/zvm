@@ -2130,8 +2130,6 @@ void zvm_end_program(uint32_t main_module_id)
 	#ifdef VERBOSE_DEBUG
 	disasm();
 	#endif
-
-	// TODO prep machine
 }
 
 #define N_REGISTERS (1<<16)
