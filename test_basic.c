@@ -93,6 +93,17 @@ static uint32_t emit_decoder(int n_in)
 	return zvm_end_module();
 }
 
+static uint32_t emit_memory_bit()
+{
+	zvm_begin_module(2, 1);
+	const struct zvm_pi WE = zvm_op_input(0);
+	const struct zvm_pi IN = zvm_op_input(1);
+	struct zvm_pi dly = zvm_op_unit_delay(ZVM_PI_PLACEHOLDER);
+	zvm_op_output(0, dly);
+	zvm_assign_arg(dly.p, 0, op_or(op_and(op_not(WE), dly), op_and(WE, IN)));
+	return zvm_end_module();
+}
+
 int retvals[100];
 int arguments[100];
 
@@ -196,6 +207,31 @@ int main(int argc, char** argv)
 			}
 			printf("]\n");
 		}
+	}
+
+	// TEST STATE
+	{
+		zvm_begin_program();
+		emit_functions();
+		zvm_end_program(emit_memory_bit());
+
+		int* WE = &arguments[0];
+		int* IN = &arguments[1];
+
+		#define T(w,i,x) { *WE=w; *IN=i; zvm_run(retvals, arguments); zvm_assert(retvals[0] == x); }
+
+		T(0,0,0);
+		T(1,0,0);
+		T(0,0,0);
+		T(0,1,0);
+		T(1,1,0);
+		T(0,0,1);
+		T(0,1,1);
+		T(0,0,1);
+		T(0,1,1);
+		T(1,0,1);
+		T(1,0,0);
+		T(0,0,0);
 	}
 
 	printf("\nIT IS OK!\n");

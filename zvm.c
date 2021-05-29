@@ -1853,8 +1853,6 @@ static void emit_function_bytecode(uint32_t function_id)
 			bs32s_save_len();
 			uint32_t* input_set_bs32 = bs32p(bs32_alloc(n_inputs));
 
-			const uint32_t reg_base = ft.next_register;
-
 			// for each requested outcome, add the coresponding
 			// input dependencies to the input set
 			int n_retvals = 0;
@@ -1863,25 +1861,40 @@ static void emit_function_bytecode(uint32_t function_id)
 					continue;
 				}
 
-				// add to set
 				bs32_union_inplace(n_inputs, input_set_bs32, get_output_input_dep_bs32(step_mod, output_index));
-
-				// populate return value registers in node output map
-				uint32_t output_reg = reg_base + (n_retvals++);
-				node_output_map_set(mod, zvm_pi(step->p, output_index), output_reg);
+				n_retvals++;
 			}
 			if (outcome_request_state_test(outcome_request_bs32i)) {
 				bs32_union_inplace(n_inputs, input_set_bs32, get_state_input_dep_bs32(step_mod));
 			}
 
+			uint32_t reg_base = ZVM_NIL;
 			int n_args = 0;
-			for (int input_index = 0; input_index < n_inputs; input_index++) {
-				if (!bs32_test(input_set_bs32, input_index)) {
+			for (int pass = 0; pass < 2; pass++) {
+				if (pass == 1) {
+					reg_base = ft.next_register;
+				}
+
+				for (int input_index = 0; input_index < n_inputs; input_index++) {
+					if (!bs32_test(input_set_bs32, input_index)) {
+						continue;
+					}
+					uint32_t src_reg = fn_trace(&ft, argpi(step->p, input_index));
+					if (pass == 1) {
+						uint32_t arg_reg = reg_base + n_retvals + (n_args++);
+						emit3(OP(MOVE), arg_reg, src_reg);
+					}
+				}
+			}
+
+			// populate return value registers in node output map
+			n_retvals = 0;
+			for (int output_index = 0; output_index < n_outputs; output_index++) {
+				if (!outcome_request_output_test(outcome_request_bs32i, output_index)) {
 					continue;
 				}
-				uint32_t src_reg = fn_trace(&ft, argpi(step->p, input_index));
-				uint32_t arg_reg = reg_base + n_retvals + (n_args++);
-				emit3(OP(MOVE), arg_reg, src_reg);
+				uint32_t output_reg = reg_base + (n_retvals++);
+				node_output_map_set(mod, zvm_pi(step->p, output_index), output_reg);
 			}
 
 			uint32_t pc = g.functions[call_function_id].bytecode_i;
