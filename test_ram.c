@@ -251,6 +251,9 @@ static void ramtest(int address_size)
 	for (int a = 0; a < n_addresses; a++) {
 		zvm_assert(ram_read(a) == ((a*a)&0xff));
 	}
+	for (int a = (n_addresses-1); a >= 0; a--) {
+		zvm_assert(ram_read(a) == ((a*a)&0xff));
+	}
 	for (int a = 0; a < n_addresses; a++) {
 		ram_write(a, 0);
 	}
