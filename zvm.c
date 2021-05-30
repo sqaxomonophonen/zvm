@@ -2124,6 +2124,7 @@ static void emit_function_bytecode(uint32_t function_id)
 
 			if (do_inline && /*XXX*/do_eqvop) {
 				if (do_eqvop) {
+					zvm_assert((!stateful_call) && "equivalent ops cannot be stateful");
 					for (int pass = 0; pass < 2; pass++) {
 						if (pass == 1) {
 							emit1(call_fn->equivalent_op);
