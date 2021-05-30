@@ -107,6 +107,9 @@ struct step {
 struct function {
 	uint32_t substance_id;
 
+	int n_arguments;
+	int n_retvals;
+
 	uint32_t bytecode_i;
 	uint32_t bytecode_n;
 
@@ -412,7 +415,8 @@ static void machine_run(uint32_t pc0)
 			exec_a21(ZVM_OP_DECODE_Y(bytecode), arg[0], arg[1], arg[2]);
 			break;
 		case OP(A11):
-			zvm_assert(!"TODO");
+			zvm_assert(ZVM_OP_DECODE_Y(bytecode) == ZVM_A11_OP(NOT) && "what other a11 ops are there?!");
+			reg_write(arg[0], !reg_read(arg[1]));
 			break;
 		case OP(MOVE):
 			reg_write(arg[0], reg_read(arg[1]));
@@ -1929,6 +1933,8 @@ static uint32_t emit_function_stubs_rec(int substance_id)
 	uint32_t function_id = zvm_arrlen(g.functions);
 	struct function fn = {
 		.substance_id = substance_id,
+		.n_arguments = sb->n_inputs,
+		.n_retvals = sb->n_outputs,
 	};
 	zvm_arrpush(g.functions, fn);
 	return function_id;
@@ -2108,6 +2114,8 @@ static void emit_function_bytecode(uint32_t function_id)
 			uint32_t call_function_id = resolve_function_id_for_substance_id(step->substance_id);
 			zvm_assert((call_function_id < function_id) && "call to function not yet emitted");
 
+			struct function* call_fn = &g.functions[call_function_id];
+
 			struct substance* step_sb = &g.substances[step->substance_id];
 			struct module* step_mod = &g.modules[step_sb->key.module_id];
 
@@ -2116,72 +2124,84 @@ static void emit_function_bytecode(uint32_t function_id)
 
 			zvm_assert((step_sb->key.module_id == ZVM_OP_DECODE_Y(*bufp(step->p))) && "subkey/op module id mismatch");
 
-			uint32_t outcome_request_bs32i = step_sb->key.outcome_request_bs32i;
+			int do_inline = call_fn->flags & FN_INLINE;
+			int do_eqvop = call_fn->flags & FN_EQVOP;
+			int do_lut32 = call_fn->flags & FN_LUT32;
 
 			const int n_inputs = step_mod->n_inputs;
 			const int n_outputs = step_mod->n_outputs;
 
-			bs32s_save_len();
-			uint32_t* input_set_bs32 = bs32p(bs32_alloc(n_inputs));
+			if (do_inline && /*XXX*/do_eqvop) {
+				if (do_eqvop) {
+					for (int pass = 0; pass < 2; pass++) {
+						if (pass == 1) {
+							emit1(call_fn->equivalent_op);
+							for (int output_index = 0; output_index < n_outputs; output_index++) {
+								if (g.u32s[sb->mod2sb_output_map_u32i + output_index] == ZVM_NIL) {
+									continue;
+								}
+								uint32_t dst = fn_tracer_alloc_register(&ft);
+								node_output_map_set(mod, zvm_pi(step->p, output_index), dst);
+								emit1(dst);
+							}
+						}
+						for (int input_index = 0; input_index < n_inputs; input_index++) {
+							if (g.u32s[sb->mod2sb_input_map_u32i + input_index] == ZVM_NIL) {
+								continue;
+							}
+							uint32_t src_reg = fn_trace(&ft, argpi(step->p, input_index));
+							if (pass == 1) emit1(src_reg);
+						}
+					}
+				} else if (do_lut32) {
+					zvm_assert(!"TODO");
+				} else {
+					zvm_assert(!"unreachable");
+				}
+			} else {
+				uint32_t outcome_request_bs32i = step_sb->key.outcome_request_bs32i;
 
-			// for each requested outcome, add the coresponding
-			// input dependencies to the input set
-			int n_retvals = 0;
-			for (int output_index = 0; output_index < n_outputs; output_index++) {
-				if (!outcome_request_output_test(outcome_request_bs32i, output_index)) {
-					continue;
+				uint32_t reg_base = ZVM_NIL;
+				int n_args = 0;
+				for (int pass = 0; pass < 2; pass++) {
+					if (pass == 1) {
+						reg_base = ft.next_register;
+					}
+
+					for (int input_index = 0; input_index < n_inputs; input_index++) {
+						if (g.u32s[sb->mod2sb_input_map_u32i + input_index] == ZVM_NIL) {
+							continue;
+						}
+						uint32_t src_reg = fn_trace(&ft, argpi(step->p, input_index));
+						if (pass == 1) {
+							uint32_t arg_reg = reg_base + call_fn->n_retvals + (n_args++);
+							emit3(OP(MOVE), arg_reg, src_reg);
+						}
+					}
 				}
 
-				bs32_union_inplace(n_inputs, input_set_bs32, get_output_input_dep_bs32(step_mod, output_index));
-				n_retvals++;
-			}
-			if (outcome_request_state_test(outcome_request_bs32i)) {
-				bs32_union_inplace(n_inputs, input_set_bs32, get_state_input_dep_bs32(step_mod));
-			}
-
-			uint32_t reg_base = ZVM_NIL;
-			int n_args = 0;
-			for (int pass = 0; pass < 2; pass++) {
-				if (pass == 1) {
-					reg_base = ft.next_register;
-				}
-
-				for (int input_index = 0; input_index < n_inputs; input_index++) {
-					if (!bs32_test(input_set_bs32, input_index)) {
+				// populate return value registers in node output map
+				uint32_t output_reg = reg_base;
+				for (int output_index = 0; output_index < n_outputs; output_index++) {
+					if (!outcome_request_output_test(outcome_request_bs32i, output_index)) {
 						continue;
 					}
-					uint32_t src_reg = fn_trace(&ft, argpi(step->p, input_index));
-					if (pass == 1) {
-						uint32_t arg_reg = reg_base + n_retvals + (n_args++);
-						emit3(OP(MOVE), arg_reg, src_reg);
-					}
+					node_output_map_set(mod, zvm_pi(step->p, output_index), output_reg++);
 				}
-			}
 
-			// populate return value registers in node output map
-			n_retvals = 0;
-			for (int output_index = 0; output_index < n_outputs; output_index++) {
-				if (!outcome_request_output_test(outcome_request_bs32i, output_index)) {
-					continue;
+
+				if (stateful_call) {
+					emit4(OP(STATEFUL_CALL), call_fn->bytecode_i, reg_base, get_state_index(mod, step->p));
+				} else {
+					emit3(OP(STATELESS_CALL), call_fn->bytecode_i, reg_base);
 				}
-				uint32_t output_reg = reg_base + (n_retvals++);
-				node_output_map_set(mod, zvm_pi(step->p, output_index), output_reg);
+
+				// return values are considered "live", and are sort of
+				// retroactively allocated here (argument values are
+				// considered "lost" and thrown away because the
+				// function is allowed to reuse/overwrite them)
+				fn_tracer_hawk_registers(&ft, call_fn->n_retvals);
 			}
-
-			uint32_t pc = g.functions[call_function_id].bytecode_i;
-			if (stateful_call) {
-				emit4(OP(STATEFUL_CALL), pc, reg_base, get_state_index(mod, step->p));
-			} else {
-				emit3(OP(STATELESS_CALL), pc, reg_base);
-			}
-
-			// return values are considered "live", and are sort of
-			// retroactively allocated here (argument values are
-			// considered "lost" and thrown away because the
-			// function is allowed to reuse/overwrite them)
-			fn_tracer_hawk_registers(&ft, n_retvals);
-
-			bs32s_restore_len();
 		}
 	}
 
