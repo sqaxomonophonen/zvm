@@ -662,7 +662,7 @@ int zvm_end_module()
 
 	// initialize input bitsets
 	{
-		const int n_input_bs32s = 1 + mod->n_inputs;
+		const int n_input_bs32s = 1 + mod->n_outputs;
 		mod->input_bs32i = bs32_alloc_2d(n_input_bs32s, mod->n_inputs);
 	}
 
