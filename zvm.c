@@ -45,8 +45,15 @@ struct substance_keyval {
 
 struct substance {
 	struct substance_key key;
+
 	uint32_t n_steps;
 	uint32_t steps_i;
+
+	int n_inputs;
+	int n_outputs;
+	uint32_t mod2sb_output_map_u32i;
+	uint32_t mod2sb_input_map_u32i;
+
 	int tag;
 	int refcount;
 };
@@ -69,10 +76,8 @@ struct function {
 	uint32_t substance_id;
 	uint32_t bytecode_i;
 	uint32_t bytecode_n;
-	int n_retvals;
-	int n_arguments;
-	uint32_t output_retval_map_u32i;
-	uint32_t input_argument_map_u32i;
+
+
 };
 
 struct call_stack_entry {
@@ -791,11 +796,48 @@ static int produce_substance_id_for_key(struct substance_key* key, int* did_inse
 	keyval->key = *key;
 	keyval->substance_id = zvm_arrlen(g.substances);
 
-	struct substance sb = {0};
-	sb.key = *key;
-	#if 0
-	fn_init_instance_u32_map(&fn);
-	#endif
+	bs32s_save_len();
+
+	struct module* mod = &g.modules[key->module_id];
+
+	const int n_module_inputs = mod->n_inputs;
+	const int n_module_outputs = mod->n_outputs;
+
+	uint32_t* input_set_bs32 = bs32p(bs32_alloc(n_module_inputs));
+
+	const uint32_t mod2sb_output_map_u32i = zvm_arrlen(g.u32s);
+	int n_substance_outputs = 0;
+	for (int output_index = 0; output_index < n_module_outputs; output_index++) {
+		if (!outcome_request_output_test(key->outcome_request_bs32i, output_index)) {
+			zvm_arrpush(g.u32s, ZVM_NIL);
+		} else {
+			bs32_union_inplace(n_module_inputs, input_set_bs32, get_output_input_dep_bs32(mod, output_index));
+			zvm_arrpush(g.u32s, n_substance_outputs++);
+		}
+	}
+	if (outcome_request_state_test(key->outcome_request_bs32i)) {
+		bs32_union_inplace(n_module_inputs, input_set_bs32, get_state_input_dep_bs32(mod));
+	}
+
+	int n_substance_inputs = 0;
+	const uint32_t mod2sb_input_map_u32i = zvm_arrlen(g.u32s);
+	for (int input_index = 0; input_index < n_module_inputs; input_index++) {
+		if (!bs32_test(input_set_bs32, input_index)) {
+			zvm_arrpush(g.u32s, ZVM_NIL);
+		} else {
+			zvm_arrpush(g.u32s, n_substance_inputs++);
+		}
+	}
+
+	bs32s_restore_len();
+
+	struct substance sb = {
+		.key = *key,
+		.n_inputs = n_substance_inputs,
+		.n_outputs = n_substance_outputs,
+		.mod2sb_output_map_u32i = mod2sb_output_map_u32i,
+		.mod2sb_input_map_u32i = mod2sb_input_map_u32i,
+	};
 	zvm_arrpush(g.substances, sb);
 
 	if (did_insert) *did_insert = 1;
@@ -1549,54 +1591,11 @@ static uint32_t emit_function_stubs_rec(int substance_id)
 		emit_function_stubs_rec(step->substance_id);
 	}
 
-	bs32s_save_len();
-
-	struct module* mod = &g.modules[sb->key.module_id];
-
-	const int n_inputs = mod->n_inputs;
-	const int n_outputs = mod->n_outputs;
-
-	uint32_t* input_set_bs32 = bs32p(bs32_alloc(n_inputs));
-
-	uint32_t output_retval_map_u32i = zvm_arrlen(g.u32s);
-	int n_retvals = 0;
-	for (int output_index = 0; output_index < n_outputs; output_index++) {
-		if (!outcome_request_output_test(sb->key.outcome_request_bs32i, output_index)) {
-			zvm_arrpush(g.u32s, ZVM_NIL);
-		} else {
-			bs32_union_inplace(n_inputs, input_set_bs32, get_output_input_dep_bs32(mod, output_index));
-			zvm_arrpush(g.u32s, n_retvals++);
-		}
-	}
-	if (outcome_request_state_test(sb->key.outcome_request_bs32i)) {
-		bs32_union_inplace(n_inputs, input_set_bs32, get_state_input_dep_bs32(mod));
-	}
-
-	int n_arguments = 0;
-	uint32_t input_argument_map_u32i = zvm_arrlen(g.u32s);
-	for (int input_index = 0; input_index < n_inputs; input_index++) {
-		if (!bs32_test(input_set_bs32, input_index)) {
-			zvm_arrpush(g.u32s, ZVM_NIL);
-		} else {
-			zvm_arrpush(g.u32s, n_arguments++);
-		}
-	}
-
-	bs32s_restore_len();
-
 	uint32_t function_id = zvm_arrlen(g.functions);
-
 	struct function fn = {
 		.substance_id = substance_id,
-		.n_retvals = n_retvals,
-		.n_arguments = n_arguments,
-		.output_retval_map_u32i = output_retval_map_u32i,
-		.input_argument_map_u32i = input_argument_map_u32i,
 	};
-
-
 	zvm_arrpush(g.functions, fn);
-
 	return function_id;
 }
 
@@ -1694,31 +1693,31 @@ static uint32_t resolve_function_id_for_substance_id(uint32_t substance_id)
 	zvm_assert(!"substance id not found");
 }
 
-static struct module* get_substance_mod(struct substance* sb)
+static inline struct module* get_substance_mod(struct substance* sb)
 {
 	return &g.modules[sb->key.module_id];
 }
 
-static struct substance* get_function_substance(struct function* fn)
+static inline struct substance* get_function_substance(struct function* fn)
 {
 	return &g.substances[fn->substance_id];
 }
 
-static struct module* get_function_mod(struct function* fn)
+static inline struct module* get_function_mod(struct function* fn)
 {
 	return get_substance_mod(get_function_substance(fn));
 }
 
 static int get_function_retval_index_for_output(struct function* fn, int output_index)
 {
-	uint32_t i = g.u32s[fn->output_retval_map_u32i + output_index];
+	uint32_t i = g.u32s[get_function_substance(fn)->mod2sb_output_map_u32i + output_index];
 	zvm_assert((i != ZVM_NIL) && "retval/output not mapped");
 	return i;
 }
 
 static int get_function_argument_index_for_input(struct function* fn, int input_index)
 {
-	uint32_t i = g.u32s[fn->input_argument_map_u32i + input_index];
+	uint32_t i = g.u32s[get_function_substance(fn)->mod2sb_input_map_u32i + input_index];
 	zvm_assert((i != ZVM_NIL) && "arg/input not mapped");
 	return i;
 }
@@ -1730,7 +1729,7 @@ static inline int get_function_retval_index(struct function* fn, int index)
 
 static inline int get_function_argument_index(struct function* fn, int index)
 {
-	return fn->n_retvals + index;
+	return get_function_substance(fn)->n_outputs + index;
 }
 
 static int get_function_retval_register_for_output(struct function* fn, int output_index)
@@ -1743,6 +1742,16 @@ static int get_function_argument_register_for_input(struct function* fn, int inp
 	return get_function_argument_index(fn, get_function_argument_index_for_input(fn, input_index));
 }
 
+static int get_function_n_retvals(struct function* fn)
+{
+	return get_function_substance(fn)->n_outputs;
+}
+
+static int get_function_n_arguments(struct function* fn)
+{
+	return get_function_substance(fn)->n_inputs;
+}
+
 struct fn_tracer {
 	struct function* fn;
 	uint32_t next_register;
@@ -1752,7 +1761,7 @@ static void fn_tracer_init(struct fn_tracer* ft, struct function* fn)
 {
 	memset(ft, 0, sizeof *ft);
 	ft->fn = fn;
-	ft->next_register = fn->n_retvals + fn->n_arguments;
+	ft->next_register = get_function_n_retvals(fn) + get_function_n_arguments(fn);
 }
 
 static uint32_t fn_tracer_alloc_register(struct fn_tracer* ft)
@@ -2070,7 +2079,7 @@ static void disasm_function_id(int function_id)
 	printf("\n");
 	printf("; func F%d:S%d:M%d // n_args=%d  n_retvals=%d // range %.6x - %.6x\n",
 		function_id, fn->substance_id, g.substances[fn->substance_id].key.module_id,
-		fn->n_arguments, fn->n_retvals,
+		get_function_n_arguments(fn), get_function_n_retvals(fn),
 		fn->bytecode_i, bytecode_end-1);
 
 	uint32_t pc = fn->bytecode_i;
@@ -2233,7 +2242,8 @@ void zvm_run(int* retvals, int* arguments)
 	struct function* main_function = &g.functions[g.main_function_id];
 
 	if (arguments != NULL) {
-		for (int i = 0; i < main_function->n_arguments; i++) {
+		const int n_arguments = get_function_n_arguments(main_function);
+		for (int i = 0; i < n_arguments; i++) {
 			reg_write(get_function_argument_index(main_function, i), arguments[i]);
 		}
 	}
@@ -2311,7 +2321,8 @@ void zvm_run(int* retvals, int* arguments)
 	#endif
 
 	if (retvals != NULL) {
-		for (int i = 0; i < main_function->n_retvals; i++) {
+		const int n_retvals = get_function_n_retvals(main_function);
+		for (int i = 0; i < n_retvals; i++) {
 			retvals[i] = reg_read(get_function_retval_index(main_function, i));
 		}
 	}
