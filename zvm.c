@@ -189,16 +189,13 @@ void zvm_begin_program()
 {
 }
 
-int zvm_begin_module(int n_inputs, int n_outputs)
+void zvm_begin_module(int n_inputs, int n_outputs)
 {
-	int id = zvm_arrlen(g.modules);
 	struct module m = {0};
 	m.n_inputs = n_inputs;
 	m.n_outputs = n_outputs;
 	m.nodecode_begin_p = buftop();
 	zvm_arrpush(g.modules, m);
-
-	return id;
 }
 
 static inline int bs32_n_words(int n_bits)
