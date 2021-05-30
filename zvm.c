@@ -187,6 +187,7 @@ static struct module* get_instance_mod_at_p(uint32_t p)
 
 void zvm_begin_program()
 {
+	zvm_init(); // XXX leaks
 }
 
 void zvm_begin_module(int n_inputs, int n_outputs)
@@ -2367,8 +2368,7 @@ void zvm_run(int* retvals, int* arguments)
 void zvm_init()
 {
 	zvm_assert(ZVM_OP_N <= ZVM_OP_MASK);
-	//memset(ZVM, 0, sizeof(*ZVM));
 	memset(&g, 0, sizeof(g));
-
+	zvm__buf = NULL;
 	machine_init();
 }
