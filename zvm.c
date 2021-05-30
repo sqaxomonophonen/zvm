@@ -33,6 +33,10 @@ enum ops {
 	#undef DEFOP
 };
 
+#define FN_EQVOP    (1<<0)
+#define FN_INLINE   (1<<1)
+#define FN_LUT32    (1<<2)
+
 uint32_t* zvm__buf;
 
 struct module {
@@ -106,10 +110,10 @@ struct function {
 	uint32_t bytecode_i;
 	uint32_t bytecode_n;
 
-	uint32_t flags; // TODO +EQVOP? +LUT?
-	uint32_t equivalent_arithmetic_op; // bytecode encoding
+	uint32_t flags; // FN_*
+	uint32_t equivalent_op; // bytecode encoding
 	uint32_t lut32; // LUT encoding of function for lut size <= 32
-	int lut_i; // lut table index for lut size > 32
+	//int lut_i; // lut table index for lut size > 32
 };
 
 struct call_stack_entry {
@@ -2205,6 +2209,8 @@ static void emit_function_bytecode(uint32_t function_id)
 
 	int lut_size = calc_lut_size(n_in, n_out);
 	if (0 <= lut_size && lut_size <= 32) {
+		fn->flags |= (FN_LUT32 | FN_INLINE);
+
 		zvm_assert((n_in <= 5) && "unexpected large value");
 		zvm_assert((n_out <= 32) && "unexpected large value");
 		int lut_length = 1 << n_in;
@@ -2250,6 +2256,47 @@ static void emit_function_bytecode(uint32_t function_id)
 			#undef WRITE_OUT
 		}
 		printf("=======================\n");
+
+		uint32_t set_equivalent_op = ZVM_NIL;
+
+		if (n_state == 0) {
+			// look for simple equivalent ops
+
+			if (n_arguments == 1 && n_retvals == 1) {
+				zvm_assert(lut_length == 2 && lut_size == 2);
+
+				switch (fn->lut32) {
+				case 1: set_equivalent_op = ZVM_OP_ENCODE_XY(OP(A11), ZVM_A11_OP(NOT)); break;
+				case 2: set_equivalent_op = OP(MOVE); break;
+				}
+			} else if (n_arguments == 2 && n_retvals == 1) {
+				zvm_assert(lut_length == 4 && lut_size == 4);
+
+				#define p00 (1<<0)
+				#define p01 (1<<1)
+				#define p10 (1<<2)
+				#define p11 (1<<3)
+
+				switch (fn->lut32) {
+				case     p01+p10+p11: set_equivalent_op = ZVM_OP_ENCODE_XY(OP(A21), ZVM_A21_OP(OR)); break;
+				case             p11: set_equivalent_op = ZVM_OP_ENCODE_XY(OP(A21), ZVM_A21_OP(AND)); break;
+				case     p01+p10    : set_equivalent_op = ZVM_OP_ENCODE_XY(OP(A21), ZVM_A21_OP(XOR)); break;
+				case p00            : set_equivalent_op = ZVM_OP_ENCODE_XY(OP(A21), ZVM_A21_OP(NOR)); break;
+				case p00+p01+p10    : set_equivalent_op = ZVM_OP_ENCODE_XY(OP(A21), ZVM_A21_OP(NAND)); break;
+				case p00        +p11: set_equivalent_op = ZVM_OP_ENCODE_XY(OP(A21), ZVM_A21_OP(XNOR)); break;
+				}
+
+				#undef p11
+				#undef p10
+				#undef p01
+				#undef p00
+			}
+		}
+
+		if (set_equivalent_op != ZVM_NIL) {
+			fn->equivalent_op = set_equivalent_op;
+			fn->flags |= (FN_EQVOP | FN_INLINE);
+		}
 	}
 }
 
