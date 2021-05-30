@@ -337,30 +337,21 @@ static inline void st_write(int index, int value)
 
 static void exec_a21(int aop, uint32_t dst_reg, uint32_t src0_reg, uint32_t src1_reg)
 {
-	int a = reg_read(src0_reg);
-	int b = reg_read(src1_reg);
+	int a = !!reg_read(src0_reg);
+	int b = !!reg_read(src1_reg);
 	int r = 0;
 
 	switch (aop) {
-	case ZVM_A21_OP(NOR):
-		r = !(a || b);
-		break;
-	case ZVM_A21_OP(NAND):
-		r = !(a && b);
-		break;
-	case ZVM_A21_OP(OR):
-		r = a || b;
-		break;
-	case ZVM_A21_OP(AND):
-		r = a && b;
-		break;
-	case ZVM_A21_OP(XOR):
-		r = !!(a ^ b);
-		break;
+	case ZVM_A21_OP(OR):   r = a | b;    break;
+	case ZVM_A21_OP(AND):  r = a & b;    break;
+	case ZVM_A21_OP(XOR):  r = a ^ b; break;
+	case ZVM_A21_OP(NOR):  r = !(a | b); break;
+	case ZVM_A21_OP(NAND): r = !(a & b); break;
+	case ZVM_A21_OP(XNOR): r = !(a ^ b);  break;
 	default: zvm_assert(!"unhandled a21 op");
 	}
 
-	reg_write(dst_reg, r);
+	reg_write(dst_reg, !!r);
 }
 
 static void machine_reset()
