@@ -2231,43 +2231,63 @@ static void emit_function_bytecode(uint32_t function_id)
 
 		fn->lut32 = 0;
 		int lii = 0;
+		#ifdef VERBOSE_DEBUG
 		printf("====== LUT TABLE ======\n");
+		#endif
 		for (int index = 0; index < lut_length; index++) {
 			int ii = 0;
 			#define NEXT_BIT (!!((index >> (ii++))&1))
 			for (int i = 0; i < n_state; i++) {
 				int v = NEXT_BIT;
 				st_write(i, v);
+				#ifdef VERBOSE_DEBUG
 				printf("%d", v);
+				#endif
 			}
+			#ifdef VERBOSE_DEBUG
 			if (n_state > 0) printf(":");
+			#endif
 			for (int i = 0; i < n_arguments; i++) {
 				int v = NEXT_BIT;
 				reg_write(get_function_argument_index(fn, i), v);
+				#ifdef VERBOSE_DEBUG
 				printf("%d", v);
+				#endif
 			}
 			#undef NEXT_BIT
 
 			machine_run(fn->bytecode_i);
 
+			#ifdef VERBOSE_DEBUG
 			printf(" -> ");
+			#endif
 
 			#define WRITE_OUT(v) fn->lut32 |= ((1 << (lii++)) * (v?1:0))
 			for (int i = 0; i < n_state; i++) {
 				int v = st_read(i);
 				WRITE_OUT(v);
+				#ifdef VERBOSE_DEBUG
 				printf("%d", v);
+				#endif
 			}
+			#ifdef VERBOSE_DEBUG
 			if (n_state > 0) printf(":");
+			#endif
 			for (int i = 0; i < n_retvals; i++) {
 				int v = reg_read(i);
 				WRITE_OUT(v);
+				#ifdef VERBOSE_DEBUG
 				printf("%d", v);
+				#endif
 			}
+			#ifdef VERBOSE_DEBUG
 			printf("\n");
+			#endif
 			#undef WRITE_OUT
 		}
+		#ifdef VERBOSE_DEBUG
 		printf("=======================\n");
+		#endif
 
 		uint32_t set_equivalent_op = ZVM_NIL;
 

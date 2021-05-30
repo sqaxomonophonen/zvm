@@ -1,6 +1,8 @@
 #OPT=-O2
 OPT=-O0 -g
-CFLAGS=-std=c99 -Wall $(OPT) -DDEBUG -DVERBOSE_DEBUG
+F=-DDEBUG -DVERBOSE_DEBUG
+#F=-DDEBUG
+CFLAGS=-std=c99 -Wall $(OPT) $(F)
 
 bin=test_basic test_ram
 
