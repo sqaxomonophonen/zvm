@@ -54,6 +54,9 @@ struct substance {
 	uint32_t mod2sb_output_map_u32i;
 	uint32_t mod2sb_input_map_u32i;
 
+	int lut_size_compact;
+	int lut_size_wide;
+
 	int tag;
 	int refcount;
 };
@@ -758,6 +761,30 @@ static void outcome_request_output_set(uint32_t bs32i, int output_index)
 	bs32_set(bs32p(bs32i), outcome_request_output_index(output_index));
 }
 
+static int calc_lut_size(int n_inputs, int n_outputs)
+{
+	if (n_outputs == 0) return 0;
+	if (n_inputs >= 31) return -1;
+	const int n_entries = 1 << n_inputs;
+	int sz = n_entries * n_outputs;
+	if (sz / n_outputs != n_entries) {
+		return -1; // overflow
+	}
+	return sz;
+}
+
+static int nearest_power_of_two(int v)
+{
+	v--;
+	v |= v >> 1;
+	v |= v >> 2;
+	v |= v >> 4;
+	v |= v >> 8;
+	v |= v >> 16;
+	v++;
+	return v;
+}
+
 static int produce_substance_id_for_key(struct substance_key* key, int* did_insert)
 {
 	// leftmost binary search; finds either an existing key (in which case,
@@ -829,12 +856,17 @@ static int produce_substance_id_for_key(struct substance_key* key, int* did_inse
 
 	bs32s_restore_len();
 
+	const int lut_ins  = n_substance_inputs+mod->n_bits;
+	const int lut_outs = n_substance_outputs+mod->n_bits;
+
 	struct substance sb = {
 		.key = *key,
 		.n_inputs = n_substance_inputs,
 		.n_outputs = n_substance_outputs,
 		.mod2sb_output_map_u32i = mod2sb_output_map_u32i,
 		.mod2sb_input_map_u32i = mod2sb_input_map_u32i,
+		.lut_size_compact = calc_lut_size(lut_ins, lut_outs),
+		.lut_size_wide = calc_lut_size(lut_ins, nearest_power_of_two(lut_outs)),
 	};
 	zvm_arrpush(g.substances, sb);
 
@@ -2133,6 +2165,8 @@ void zvm_end_program(uint32_t main_module_id)
 		bs32_print(outcome_request_sz, bufp(key->outcome_request_bs32i));
 
 		printf(" n_steps=%d", sb->n_steps);
+
+		printf(" lut=%d/%d", sb->lut_size_compact, sb->lut_size_wide);
 
 		printf("\n");
 	}
