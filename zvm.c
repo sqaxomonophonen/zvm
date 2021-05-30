@@ -76,8 +76,6 @@ struct function {
 	uint32_t substance_id;
 	uint32_t bytecode_i;
 	uint32_t bytecode_n;
-
-
 };
 
 struct call_stack_entry {
