@@ -821,6 +821,9 @@ static int produce_substance_id_for_key(struct substance_key* key, int* did_inse
 	keyval->key = *key;
 	keyval->substance_id = zvm_arrlen(g.substances);
 
+
+	// calc input/output mapping
+
 	bs32s_save_len();
 
 	struct module* mod = &g.modules[key->module_id];
