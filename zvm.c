@@ -1866,6 +1866,10 @@ static void emit_function_bytecode(uint32_t function_id)
 	struct substance* sb = &g.substances[fn->substance_id];
 	struct module* mod = &g.modules[sb->key.module_id];
 
+	if (sb->lut_size_compact <= 32) {
+		printf("TODO consider inline LUTs for function id %d (lut size %d)\n", function_id, sb->lut_size_compact);
+	}
+
 	struct fn_tracer ft;
 	fn_tracer_init(&ft, fn);
 
