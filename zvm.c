@@ -578,6 +578,7 @@ int zvm_end_module()
 
 	mod->nodecode_end_p = buftop();
 
+	// set output references to nil...
 	struct zvm_pi* outputs = zvm_arradd(g.outputs, mod->n_outputs);
 	mod->outputs_i = outputs - g.outputs;
 	memset(outputs, 0, mod->n_outputs * sizeof(*outputs));
@@ -590,6 +591,7 @@ int zvm_end_module()
 	mod->state_index_map_i = zvm_arrlen(g.state_index_maps);
 	int next_state_index = 0;
 
+	// scan the code...
 	for (int pass = 0; pass < 2; pass++) {
 		int n_nodes_total = 0;
 
@@ -598,21 +600,23 @@ int zvm_end_module()
 		while (p < p_end) {
 			int n_node_outputs = get_op_n_outputs(p);
 
-			// setup outputs and n_bits
 			if (pass == 0) {
 				uint32_t nodecode = *bufp(p);
 				const int op = ZVM_OP_DECODE_X(nodecode);
 
 				if (op == ZVM_OP(OUTPUT)) {
+					// setup output
 					int output_index = ZVM_OP_DECODE_Y(nodecode);
 					zvm_assert(0 <= output_index && output_index < mod->n_outputs);
 					struct zvm_pi* output = &g.outputs[mod->outputs_i + output_index];
 					zvm_assert(is_pi_placeholder(*output) && "double assignment");
 					*output = argpi(p, 0);
 				} else if (op == ZVM_OP(UNIT_DELAY)) {
+					// handle state
 					mod->n_bits++;
 					zvm_arrpush(g.state_index_maps, zvm_pi(p, next_state_index++));
 				} else if (op == ZVM_OP(INSTANCE)) {
+					// handle state
 					struct module* instance_mod = get_instance_mod_for_nodecode(nodecode);
 					mod->n_bits += instance_mod->n_bits;
 					if (instance_mod->n_bits > 0) {
@@ -623,6 +627,7 @@ int zvm_end_module()
 			}
 
 			if (pass == 1) {
+				// write node outputs in second pass
 				for (int i = 0; i < n_node_outputs; i++) {
 					np->p = p;
 					np->i = i;
@@ -636,6 +641,7 @@ int zvm_end_module()
 		zvm_assert(p == p_end);
 
 		if (pass == 0) {
+			// alloc space for node outputs
 			mod->n_node_outputs = n_nodes_total;
 			np = zvm_arradd(g.node_outputs, mod->n_node_outputs);
 			mod->node_outputs_i = np - g.node_outputs;
@@ -677,6 +683,8 @@ int zvm_end_module()
 	#ifdef VERBOSE_DEBUG
 	printf("\n");
 	#endif
+
+	// TODO detect if module is "splittable"?
 
 	return module_id;
 }
