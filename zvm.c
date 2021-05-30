@@ -5,6 +5,34 @@
 
 #include "zvm.h"
 
+#define N_REGISTERS (1<<16)
+#define CALL_STACK_SIZE (1<<8)
+#define STATE_SZ (1<<20)
+
+#define ZVM_MOD (&g.modules[zvm_arrlen(g.modules)-1])
+
+#define OPS \
+	\
+	DEFOP(NIL,0) \
+	DEFOP(STATEFUL_CALL,3) \
+	DEFOP(STATELESS_CALL,2) \
+	DEFOP(RETURN,0) \
+	DEFOP(A21,3) \
+	DEFOP(A11,2) \
+	DEFOP(MOVE,2) \
+	DEFOP(WRITE,2) \
+	DEFOP(READ,2) \
+	DEFOP(LOADIMM,2) \
+	DEFOP(N,0)
+
+#define OP(op) OP_##op
+
+enum ops {
+	#define DEFOP(op,narg) OP(op),
+	OPS
+	#undef DEFOP
+};
+
 uint32_t* zvm__buf;
 
 struct module {
@@ -54,9 +82,6 @@ struct substance {
 	uint32_t mod2sb_output_map_u32i;
 	uint32_t mod2sb_input_map_u32i;
 
-	int lut_size_compact;
-	int lut_size_wide;
-
 	int tag;
 	int refcount;
 };
@@ -77,8 +102,14 @@ struct step {
 
 struct function {
 	uint32_t substance_id;
+
 	uint32_t bytecode_i;
 	uint32_t bytecode_n;
+
+	uint32_t flags; // TODO +EQVOP? +LUT?
+	uint32_t equivalent_arithmetic_op; // bytecode encoding
+	uint32_t lut32; // LUT encoding of function for lut size <= 32
+	int lut_i; // lut table index for lut size > 32
 };
 
 struct call_stack_entry {
@@ -125,8 +156,6 @@ static inline int is_valid_module_id(int module_id)
 	return 0 <= module_id && module_id < zvm_arrlen(g.modules);
 }
 
-#define ZVM_MOD (&g.modules[zvm_arrlen(g.modules)-1])
-
 // stolen from nothings/stb/stretchy_buffer.h
 void* zvm__grow_impl(void* xs, int increment, int item_sz)
 {
@@ -157,6 +186,282 @@ static uint32_t* bufp(uint32_t p)
 {
 	return &zvm__buf[p];
 }
+
+
+static inline struct module* get_substance_mod(struct substance* sb)
+{
+	return &g.modules[sb->key.module_id];
+}
+
+static inline struct substance* get_function_substance(struct function* fn)
+{
+	return &g.substances[fn->substance_id];
+}
+
+static inline struct module* get_function_mod(struct function* fn)
+{
+	return get_substance_mod(get_function_substance(fn));
+}
+
+static int get_function_retval_index_for_output(struct function* fn, int output_index)
+{
+	uint32_t i = g.u32s[get_function_substance(fn)->mod2sb_output_map_u32i + output_index];
+	zvm_assert((i != ZVM_NIL) && "retval/output not mapped");
+	return i;
+}
+
+static int get_function_argument_index_for_input(struct function* fn, int input_index)
+{
+	uint32_t i = g.u32s[get_function_substance(fn)->mod2sb_input_map_u32i + input_index];
+	zvm_assert((i != ZVM_NIL) && "arg/input not mapped");
+	return i;
+}
+
+static inline int get_function_retval_index(struct function* fn, int index)
+{
+	return index;
+}
+
+static inline int get_function_argument_index(struct function* fn, int index)
+{
+	return get_function_substance(fn)->n_outputs + index;
+}
+
+static int get_function_retval_register_for_output(struct function* fn, int output_index)
+{
+	return get_function_retval_index(fn, get_function_retval_index_for_output(fn, output_index));
+}
+
+static int get_function_argument_register_for_input(struct function* fn, int input_index)
+{
+	return get_function_argument_index(fn, get_function_argument_index_for_input(fn, input_index));
+}
+
+static int get_function_n_retvals(struct function* fn)
+{
+	return get_function_substance(fn)->n_outputs;
+}
+
+
+static int get_bytecode_op_args(uint32_t bytecode)
+{
+	uint32_t op = ZVM_OP_DECODE_X(bytecode);
+	switch (op) {
+		#define DEFOP(op,narg) case OP(op): return narg;
+		OPS
+		#undef DEFOP
+	}
+	zvm_assert("!unhandled op");
+	return 0;
+}
+
+static int get_bytecode_op_length(uint32_t bytecode)
+{
+	return 1 + get_bytecode_op_args(bytecode);
+}
+
+static int get_function_n_arguments(struct function* fn)
+{
+	return get_function_substance(fn)->n_inputs;
+}
+
+static void machine_mem_clear()
+{
+	struct machine* m = &g.machine;
+	memset(m->registers, 0, N_REGISTERS * sizeof(*m->registers));
+	memset(m->state, 0, STATE_SZ * sizeof(*m->state));
+}
+
+static void machine_init()
+{
+	struct machine* m = &g.machine;
+
+	zvm_arrsetlen(m->registers, N_REGISTERS);
+	zvm_arrsetlen(m->state, STATE_SZ);
+	zvm_arrsetlen(m->call_stack, CALL_STACK_SIZE);
+
+	memset(m->call_stack, 0, CALL_STACK_SIZE * sizeof(*m->call_stack));
+
+	machine_mem_clear();
+}
+
+static inline struct call_stack_entry* mtop()
+{
+	struct machine* m = &g.machine;
+	return &m->call_stack[m->call_stack_top];
+}
+
+static void mpush(int pc, int reg0, int state_offset)
+{
+	struct machine* m = &g.machine;
+	struct call_stack_entry e = {
+		.pc = pc,
+		.reg0 = reg0,
+		.state_offset = state_offset,
+	};
+	memcpy(&m->call_stack[++m->call_stack_top], &e, sizeof e);
+}
+
+static int mpop()
+{
+	g.machine.call_stack_top--;
+	return g.machine.call_stack_top;
+}
+
+static inline int reg_read(int index)
+{
+	return !!g.machine.registers[mtop()->reg0 + index];
+}
+
+static inline void reg_write(int index, int value)
+{
+	g.machine.registers[mtop()->reg0 + index] = !!value;
+}
+
+static inline int st_read(int index)
+{
+	return g.machine.state[mtop()->state_offset + index];
+}
+
+static inline void st_write(int index, int value)
+{
+	g.machine.state[mtop()->state_offset + index] = !!value;
+}
+
+static void exec_a21(int aop, uint32_t dst_reg, uint32_t src0_reg, uint32_t src1_reg)
+{
+	int a = reg_read(src0_reg);
+	int b = reg_read(src1_reg);
+	int r = 0;
+
+	switch (aop) {
+	case ZVM_A21_OP(NOR):
+		r = !(a || b);
+		break;
+	case ZVM_A21_OP(NAND):
+		r = !(a && b);
+		break;
+	case ZVM_A21_OP(OR):
+		r = a || b;
+		break;
+	case ZVM_A21_OP(AND):
+		r = a && b;
+		break;
+	case ZVM_A21_OP(XOR):
+		r = !!(a ^ b);
+		break;
+	default: zvm_assert(!"unhandled a21 op");
+	}
+
+	reg_write(dst_reg, r);
+}
+
+static void machine_reset()
+{
+	g.machine.call_stack_top = -1;
+	mpush(0,0,0);
+}
+
+static void machine_run(uint32_t pc0)
+{
+	int pc = pc0;
+
+	machine_reset();
+
+	int executing = 1;
+	int iteration = 0;
+	while (executing) {
+		iteration++;
+
+		#if 0
+		printf("i:%.8d ", iteration);
+		disasm_pc(pc);
+		#endif
+
+		uint32_t bytecode = g.bytecode[pc];
+
+		uint32_t* arg = &g.bytecode[pc+1];
+
+		int op = ZVM_OP_DECODE_X(bytecode);
+
+		int next_pc = pc + get_bytecode_op_length(bytecode);
+
+		switch (op) {
+		case OP(STATEFUL_CALL):
+			mtop()->pc = next_pc; // return address
+			next_pc = arg[0];
+			mpush(next_pc, mtop()->reg0 + arg[1], mtop()->state_offset + arg[2]);
+			break;;
+		case OP(STATELESS_CALL):
+			mtop()->pc = next_pc; // return address
+			next_pc = arg[0];
+			mpush(next_pc, mtop()->reg0 + arg[1], mtop()->state_offset);
+			break;
+		case OP(RETURN):
+			if (mpop() >= 0) {
+				next_pc = mtop()->pc;
+			} else {
+				executing = 0;
+			}
+			break;
+		case OP(A21):
+			exec_a21(ZVM_OP_DECODE_Y(bytecode), arg[0], arg[1], arg[2]);
+			break;
+		case OP(A11):
+			zvm_assert(!"TODO");
+			break;
+		case OP(MOVE):
+			reg_write(arg[0], reg_read(arg[1]));
+			break;
+		case OP(WRITE):
+			st_write(arg[0], reg_read(arg[1]));
+			break;
+		case OP(READ):
+			reg_write(arg[0], st_read(arg[1]));
+			break;
+		case OP(LOADIMM):
+			zvm_assert(!"TODO");
+			break;
+		default:
+			zvm_assert(!"unhandled op");
+		}
+
+		pc = next_pc;
+	}
+
+	#if 0
+	#ifdef VERBOSE_DEBUG
+	printf("run took %d iterations\n", iteration);
+	#endif
+	#endif
+
+	machine_reset(); // ensure that out-of-execution r/w have zero offsets
+}
+
+static void run_function(struct function* fn, int* retvals, int* arguments)
+{
+	if (arguments != NULL) {
+		const int n_arguments = get_function_n_arguments(fn);
+		for (int i = 0; i < n_arguments; i++) {
+			reg_write(get_function_argument_index(fn, i), arguments[i]);
+		}
+	}
+
+	machine_run(fn->bytecode_i);
+
+	if (retvals != NULL) {
+		const int n_retvals = get_function_n_retvals(fn);
+		for (int i = 0; i < n_retvals; i++) {
+			retvals[i] = reg_read(get_function_retval_index(fn, i));
+		}
+	}
+}
+
+void zvm_run(int* retvals, int* arguments)
+{
+	run_function(&g.functions[g.main_function_id], retvals, arguments);
+}
+
 
 static inline int get_module_outcome_request_sz(struct module* mod)
 {
@@ -857,17 +1162,12 @@ static int produce_substance_id_for_key(struct substance_key* key, int* did_inse
 
 	bs32s_restore_len();
 
-	const int lut_ins  = n_substance_inputs+mod->n_bits;
-	const int lut_outs = n_substance_outputs+mod->n_bits;
-
 	struct substance sb = {
 		.key = *key,
 		.n_inputs = n_substance_inputs,
 		.n_outputs = n_substance_outputs,
 		.mod2sb_output_map_u32i = mod2sb_output_map_u32i,
 		.mod2sb_input_map_u32i = mod2sb_input_map_u32i,
-		.lut_size_compact = calc_lut_size(lut_ins, lut_outs),
-		.lut_size_wide = calc_lut_size(lut_ins, nearest_power_of_two(lut_outs)),
 	};
 	zvm_arrpush(g.substances, sb);
 
@@ -1658,28 +1958,6 @@ static int get_state_index(struct module* mod, uint32_t p)
 	zvm_assert(!"state p not found");
 }
 
-#define OPS \
-	\
-	DEFOP(NIL,0) \
-	DEFOP(STATEFUL_CALL,3) \
-	DEFOP(STATELESS_CALL,2) \
-	DEFOP(RETURN,0) \
-	DEFOP(A21,3) \
-	DEFOP(A11,2) \
-	DEFOP(MOVE,2) \
-	DEFOP(WRITE,2) \
-	DEFOP(READ,2) \
-	DEFOP(LOADIMM,2) \
-	DEFOP(N,0)
-
-#define OP(op) OP_##op
-
-enum ops {
-	#define DEFOP(op,narg) OP(op),
-	OPS
-	#undef DEFOP
-};
-
 static void emit1(uint32_t x0)
 {
 	zvm_arrpush(g.bytecode, x0);
@@ -1722,65 +2000,6 @@ static uint32_t resolve_function_id_for_substance_id(uint32_t substance_id)
 		}
 	}
 	zvm_assert(!"substance id not found");
-}
-
-static inline struct module* get_substance_mod(struct substance* sb)
-{
-	return &g.modules[sb->key.module_id];
-}
-
-static inline struct substance* get_function_substance(struct function* fn)
-{
-	return &g.substances[fn->substance_id];
-}
-
-static inline struct module* get_function_mod(struct function* fn)
-{
-	return get_substance_mod(get_function_substance(fn));
-}
-
-static int get_function_retval_index_for_output(struct function* fn, int output_index)
-{
-	uint32_t i = g.u32s[get_function_substance(fn)->mod2sb_output_map_u32i + output_index];
-	zvm_assert((i != ZVM_NIL) && "retval/output not mapped");
-	return i;
-}
-
-static int get_function_argument_index_for_input(struct function* fn, int input_index)
-{
-	uint32_t i = g.u32s[get_function_substance(fn)->mod2sb_input_map_u32i + input_index];
-	zvm_assert((i != ZVM_NIL) && "arg/input not mapped");
-	return i;
-}
-
-static inline int get_function_retval_index(struct function* fn, int index)
-{
-	return index;
-}
-
-static inline int get_function_argument_index(struct function* fn, int index)
-{
-	return get_function_substance(fn)->n_outputs + index;
-}
-
-static int get_function_retval_register_for_output(struct function* fn, int output_index)
-{
-	return get_function_retval_index(fn, get_function_retval_index_for_output(fn, output_index));
-}
-
-static int get_function_argument_register_for_input(struct function* fn, int input_index)
-{
-	return get_function_argument_index(fn, get_function_argument_index_for_input(fn, input_index));
-}
-
-static int get_function_n_retvals(struct function* fn)
-{
-	return get_function_substance(fn)->n_outputs;
-}
-
-static int get_function_n_arguments(struct function* fn)
-{
-	return get_function_substance(fn)->n_inputs;
 }
 
 struct fn_tracer {
@@ -1866,10 +2085,6 @@ static void emit_function_bytecode(uint32_t function_id)
 
 	struct substance* sb = &g.substances[fn->substance_id];
 	struct module* mod = &g.modules[sb->key.module_id];
-
-	if (sb->lut_size_compact <= 32) {
-		printf("TODO consider inline LUTs for function id %d (lut size %d)\n", function_id, sb->lut_size_compact);
-	}
 
 	struct fn_tracer ft;
 	fn_tracer_init(&ft, fn);
@@ -1980,6 +2195,62 @@ static void emit_function_bytecode(uint32_t function_id)
 	emit1(OP(RETURN));
 
 	fn->bytecode_n = zvm_arrlen(g.bytecode) - fn->bytecode_i;
+
+	const int n_arguments = get_function_n_arguments(fn);
+	const int n_retvals = get_function_n_retvals(fn);
+	const int n_state = mod->n_bits;
+
+	const int n_in = n_state + n_arguments;
+	const int n_out = n_state + n_retvals;
+
+	int lut_size = calc_lut_size(n_in, n_out);
+	if (0 <= lut_size && lut_size <= 32) {
+		zvm_assert((n_in <= 5) && "unexpected large value");
+		zvm_assert((n_out <= 32) && "unexpected large value");
+		int lut_length = 1 << n_in;
+		zvm_assert((lut_length <= 32) && "unexpected large value");
+		zvm_assert((lut_length * n_out == lut_size) && "expected to reach same conclusion");
+
+		fn->lut32 = 0;
+		int lii = 0;
+		printf("====== LUT TABLE ======\n");
+		for (int index = 0; index < lut_length; index++) {
+			int ii = 0;
+			#define NEXT_BIT (!!((index >> (ii++))&1))
+			for (int i = 0; i < n_state; i++) {
+				int v = NEXT_BIT;
+				st_write(i, v);
+				printf("%d", v);
+			}
+			if (n_state > 0) printf(":");
+			for (int i = 0; i < n_arguments; i++) {
+				int v = NEXT_BIT;
+				reg_write(get_function_argument_index(fn, i), v);
+				printf("%d", v);
+			}
+			#undef NEXT_BIT
+
+			machine_run(fn->bytecode_i);
+
+			printf(" -> ");
+
+			#define WRITE_OUT(v) fn->lut32 |= ((1 << (lii++)) * (v?1:0))
+			for (int i = 0; i < n_state; i++) {
+				int v = st_read(i);
+				WRITE_OUT(v);
+				printf("%d", v);
+			}
+			if (n_state > 0) printf(":");
+			for (int i = 0; i < n_retvals; i++) {
+				int v = reg_read(i);
+				WRITE_OUT(v);
+				printf("%d", v);
+			}
+			printf("\n");
+			#undef WRITE_OUT
+		}
+		printf("=======================\n");
+	}
 }
 
 static void emit_functions()
@@ -2003,23 +2274,6 @@ static void emit_functions()
 	printf("\n");
 	#endif
 	#endif
-}
-
-static int get_bytecode_op_args(uint32_t bytecode)
-{
-	uint32_t op = ZVM_OP_DECODE_X(bytecode);
-	switch (op) {
-		#define DEFOP(op,narg) case OP(op): return narg;
-		OPS
-		#undef DEFOP
-	}
-	zvm_assert("!unhandled op");
-	return 0;
-}
-
-static int get_bytecode_op_length(uint32_t bytecode)
-{
-	return 1 + get_bytecode_op_args(bytecode);
 }
 
 static const char* get_bytecode_op_name(uint32_t bytecode)
@@ -2171,8 +2425,6 @@ void zvm_end_program(uint32_t main_module_id)
 
 		printf(" n_steps=%d", sb->n_steps);
 
-		printf(" lut=%d/%d", sb->lut_size_compact, sb->lut_size_wide);
-
 		printf("\n");
 	}
 
@@ -2184,185 +2436,8 @@ void zvm_end_program(uint32_t main_module_id)
 	#ifdef VERBOSE_DEBUG
 	disasm();
 	#endif
-}
 
-#define N_REGISTERS (1<<16)
-#define CALL_STACK_SIZE (1<<8)
-#define STATE_SZ (1<<20)
-
-static void machine_init()
-{
-	struct machine* m = &g.machine;
-
-	zvm_arrsetlen(m->registers, N_REGISTERS);
-	zvm_arrsetlen(m->state, STATE_SZ);
-	zvm_arrsetlen(m->call_stack, CALL_STACK_SIZE);
-
-	memset(m->registers, 0, N_REGISTERS * sizeof(*m->registers));
-	memset(m->state, 0, STATE_SZ * sizeof(*m->state));
-	memset(m->call_stack, 0, CALL_STACK_SIZE * sizeof(*m->call_stack));
-}
-
-static inline struct call_stack_entry* mtop()
-{
-	struct machine* m = &g.machine;
-	return &m->call_stack[m->call_stack_top];
-}
-
-static void mpush(int pc, int reg0, int state_offset)
-{
-	struct machine* m = &g.machine;
-	struct call_stack_entry e = {
-		.pc = pc,
-		.reg0 = reg0,
-		.state_offset = state_offset,
-	};
-	memcpy(&m->call_stack[++m->call_stack_top], &e, sizeof e);
-}
-
-static int mpop()
-{
-	g.machine.call_stack_top--;
-	return g.machine.call_stack_top;
-}
-
-static inline int reg_read(int index)
-{
-	return !!g.machine.registers[mtop()->reg0 + index];
-}
-
-static inline void reg_write(int index, int value)
-{
-	g.machine.registers[mtop()->reg0 + index] = !!value;
-}
-
-static inline int st_read(int index)
-{
-	return g.machine.state[mtop()->state_offset + index];
-}
-
-static inline void st_write(int index, int value)
-{
-	g.machine.state[mtop()->state_offset + index] = !!value;
-}
-
-static void exec_a21(int aop, uint32_t dst_reg, uint32_t src0_reg, uint32_t src1_reg)
-{
-	int a = reg_read(src0_reg);
-	int b = reg_read(src1_reg);
-	int r = 0;
-
-	switch (aop) {
-	case ZVM_A21_OP(NOR):
-		r = !(a || b);
-		break;
-	case ZVM_A21_OP(NAND):
-		r = !(a && b);
-		break;
-	case ZVM_A21_OP(OR):
-		r = a || b;
-		break;
-	case ZVM_A21_OP(AND):
-		r = a && b;
-		break;
-	case ZVM_A21_OP(XOR):
-		r = !!(a ^ b);
-		break;
-	default: zvm_assert(!"unhandled a21 op");
-	}
-
-	reg_write(dst_reg, r);
-}
-
-void zvm_run(int* retvals, int* arguments)
-{
-	struct function* main_function = &g.functions[g.main_function_id];
-
-	if (arguments != NULL) {
-		const int n_arguments = get_function_n_arguments(main_function);
-		for (int i = 0; i < n_arguments; i++) {
-			reg_write(get_function_argument_index(main_function, i), arguments[i]);
-		}
-	}
-
-	int pc = main_function->bytecode_i;
-
-	//struct machine* machine = &g.machine;
-
-	int executing = 1;
-	int iteration = 0;
-	while (executing) {
-		iteration++;
-
-		#if 0
-		printf("i:%.8d ", iteration);
-		disasm_pc(pc);
-		#endif
-
-		uint32_t bytecode = g.bytecode[pc];
-
-		uint32_t* arg = &g.bytecode[pc+1];
-
-		int op = ZVM_OP_DECODE_X(bytecode);
-
-		int next_pc = pc + get_bytecode_op_length(bytecode);
-
-		switch (op) {
-		case OP(STATEFUL_CALL):
-			mtop()->pc = next_pc; // return address
-			next_pc = arg[0];
-			mpush(next_pc, mtop()->reg0 + arg[1], mtop()->state_offset + arg[2]);
-			break;;
-		case OP(STATELESS_CALL):
-			mtop()->pc = next_pc; // return address
-			next_pc = arg[0];
-			mpush(next_pc, mtop()->reg0 + arg[1], mtop()->state_offset);
-			break;
-		case OP(RETURN):
-			if (mpop() >= 0) {
-				next_pc = mtop()->pc;
-			} else {
-				g.machine.call_stack_top = 0; // gotcha ya stupid f!%$&
-				executing = 0;
-			}
-			break;
-		case OP(A21):
-			exec_a21(ZVM_OP_DECODE_Y(bytecode), arg[0], arg[1], arg[2]);
-			break;
-		case OP(A11):
-			zvm_assert(!"TODO");
-			break;
-		case OP(MOVE):
-			reg_write(arg[0], reg_read(arg[1]));
-			break;
-		case OP(WRITE):
-			st_write(arg[0], reg_read(arg[1]));
-			break;
-		case OP(READ):
-			reg_write(arg[0], st_read(arg[1]));
-			break;
-		case OP(LOADIMM):
-			zvm_assert(!"TODO");
-			break;
-		default:
-			zvm_assert(!"unhandled op");
-		}
-
-		pc = next_pc;
-	}
-
-	#if 0
-	#ifdef VERBOSE_DEBUG
-	printf("run took %d iterations\n", iteration);
-	#endif
-	#endif
-
-	if (retvals != NULL) {
-		const int n_retvals = get_function_n_retvals(main_function);
-		for (int i = 0; i < n_retvals; i++) {
-			retvals[i] = reg_read(get_function_retval_index(main_function, i));
-		}
-	}
+	machine_mem_clear();
 }
 
 void zvm_init()
