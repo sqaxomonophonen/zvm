@@ -23,11 +23,12 @@
 #define ZVM_A21_OPS \
 	\
 	ZOP(NIL) \
-	ZOP(NOR) \
-	ZOP(NAND) \
 	ZOP(OR) \
 	ZOP(AND) \
 	ZOP(XOR) \
+	ZOP(NOR) \
+	ZOP(NAND) \
+	ZOP(XNOR) \
 	ZOP(N)
 
 // arithmetic 1-to-1 ops
