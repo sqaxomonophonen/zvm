@@ -2329,6 +2329,8 @@ static void emit_function_bytecode(uint32_t function_id)
 			fn->equivalent_op = set_equivalent_op;
 			fn->flags |= (FN_EQVOP | FN_INLINE);
 		}
+
+		// TODO we can rollback bytecode... (when lut32 ops are supported)
 	}
 }
 
