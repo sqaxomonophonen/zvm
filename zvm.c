@@ -2445,6 +2445,7 @@ static void emit_functions()
 	clear_substance_tags();
 	g.main_function_id = emit_function_stubs_rec(g.main_substance_id);
 
+	// prevent emission of "special function", like LUT or EQVOP
 	g.functions[g.main_function_id].flags |= FN_FORCE_BYTECODE;
 
 	const int n_functions = zvm_arrlen(g.functions);
