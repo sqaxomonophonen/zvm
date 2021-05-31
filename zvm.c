@@ -2515,7 +2515,7 @@ static int disasm_pc(int pc)
 		if (i < len) {
 			printf(" %.8x", g.bytecode[pc+i]);
 		} else {
-			printf("         ");
+			printf(" . . . . ");
 		}
 	}
 
