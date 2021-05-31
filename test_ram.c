@@ -269,6 +269,7 @@ int main(int argc, char** argv)
 	ramtest(4);
 	ramtest(8);
 	//ramtest(12);
+	//ramtest(16);
 
 	printf("YEAH OK\n");
 
