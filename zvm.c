@@ -591,16 +591,6 @@ static void lut_exec(uint32_t pc, int regbase, int stbase)
 	#endif
 }
 
-static void lut_exec_stateful(uint32_t pc, int regbase, int stbase)
-{
-	lut_exec(pc, regbase, stbase);
-}
-
-static void lut_exec_stateless(uint32_t pc, int regbase)
-{
-	lut_exec(pc, regbase, -1);
-}
-
 static void machine_reset()
 {
 	g.machine.call_stack_top = -1;
@@ -643,10 +633,10 @@ static void machine_run(uint32_t pc0)
 			mpush(next_pc, mtop()->reg0 + arg[1], mtop()->state_offset);
 			break;
 		case OP(STATEFUL_LUT):
-			lut_exec_stateful(arg[0], mtop()->reg0 + arg[1], mtop()->state_offset + arg[2]);
+			lut_exec(arg[0], mtop()->reg0 + arg[1], mtop()->state_offset + arg[2]);
 			break;;
 		case OP(STATELESS_LUT):
-			lut_exec_stateless(arg[0], mtop()->reg0 + arg[1]);
+			lut_exec(arg[0], mtop()->reg0 + arg[1], -1);
 			break;
 		case OP(RETURN):
 			if (mpop() >= 0) {
