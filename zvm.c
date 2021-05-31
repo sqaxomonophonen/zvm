@@ -540,36 +540,36 @@ static void lut_exec(uint32_t pc, int regbase, int stbase)
 
 	int lut_index = 0;
 	int ii = 0;
-	printf("LUT ");
+	//printf("LUT ");
 	for (int i = 0; i < n_state; i++) {
 		int v = st_read(stbase + i);
-		lut_index |= v ? (1<<ii) : 0;
-		printf("%d", v);
+		if (v) lut_index |= 1 << ii;
 		ii++;
+		//printf("%d", v);
 	}
-	printf(":");
+	//printf(":");
 	for (int i = 0; i < n_arguments; i++) {
 		int v = reg_read(regbase + n_retvals + i);
-		lut_index |= v ? (1<<ii) : 0;
-		printf("%d", v);
+		if (v) lut_index |= 1 << ii;
 		ii++;
+		//printf("%d", v);
 	}
 
-	printf("->");
+	//printf("->");
 
-	int luti = lut_index * (n_state * n_retvals);
+	int lut_cursor = lut_index * (n_state + n_retvals);
 	for (int i = 0; i < n_state; i++) {
-		int v = bs32_test(p, luti++);
+		int v = bs32_test(p, lut_cursor++);
 		st_write(stbase + i, v);
-		printf("%d",v);
+		//printf("%d",v);
 	}
-	printf(":");
+	//printf(":");
 	for (int i = 0; i < n_retvals; i++) {
-		int v = bs32_test(p, luti++);
+		int v = bs32_test(p, lut_cursor++);
 		reg_write(regbase + i, v);
-		printf("%d",v);
+		//printf("%d",v);
 	}
-	printf("\n");
+	//printf("\n");
 }
 
 static void lut_exec_stateful(uint32_t pc, int regbase, int stbase)
@@ -2238,7 +2238,7 @@ static void emit_function_bytecode(uint32_t function_id)
 						}
 						uint32_t src_reg = fn_trace(&ft, argpi(step->p, input_index));
 						if (pass == 1) {
-							uint32_t arg_reg = reg_base + call_fn->n_retvals + (n_args++);
+							uint32_t arg_reg = reg_base + get_function_argument_index(call_fn, n_args++);
 							emit3(OP(MOVE), arg_reg, src_reg);
 						}
 					}
@@ -2320,6 +2320,7 @@ static void emit_function_bytecode(uint32_t function_id)
 		}
 		*(lut++) = n_arguments;
 		*(lut++) = n_retvals;
+		zvm_assert(lut-base == header_size);
 
 		#ifdef VERBOSE_DEBUG
 		printf("====== LUT TABLE ======\n");
