@@ -540,36 +540,55 @@ static void lut_exec(uint32_t pc, int regbase, int stbase)
 
 	int lut_index = 0;
 	int ii = 0;
-	//printf("LUT ");
+	//#define LUT_DEBUG
+	#ifdef LUT_DEBUG
+	printf("LUT ");
+	#endif
 	for (int i = 0; i < n_state; i++) {
 		int v = st_read(stbase + i);
 		if (v) lut_index |= 1 << ii;
 		ii++;
-		//printf("%d", v);
+		#ifdef LUT_DEBUG
+		printf("%d", v);
+		#endif
 	}
-	//printf(":");
+	#ifdef LUT_DEBUG
+	printf(":");
+	#endif
 	for (int i = 0; i < n_arguments; i++) {
 		int v = reg_read(regbase + n_retvals + i);
 		if (v) lut_index |= 1 << ii;
 		ii++;
-		//printf("%d", v);
+		#ifdef LUT_DEBUG
+		printf("%d", v);
+		#endif
 	}
 
-	//printf("->");
+	#ifdef LUT_DEBUG
+	printf("->");
+	#endif
 
 	int lut_cursor = lut_index * (n_state + n_retvals);
 	for (int i = 0; i < n_state; i++) {
 		int v = bs32_test(p, lut_cursor++);
 		st_write(stbase + i, v);
-		//printf("%d",v);
+		#ifdef LUT_DEBUG
+		printf("%d",v);
+		#endif
 	}
-	//printf(":");
+	#ifdef LUT_DEBUG
+	printf(":");
+	#endif
 	for (int i = 0; i < n_retvals; i++) {
 		int v = bs32_test(p, lut_cursor++);
 		reg_write(regbase + i, v);
-		//printf("%d",v);
+		#ifdef LUT_DEBUG
+		printf("%d",v);
+		#endif
 	}
-	//printf("\n");
+	#ifdef LUT_DEBUG
+	printf("\n");
+	#endif
 }
 
 static void lut_exec_stateful(uint32_t pc, int regbase, int stbase)
