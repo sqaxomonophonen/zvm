@@ -290,6 +290,11 @@ int main(int argc, char** argv)
 			*WE = 0;
 			zvm_run(retvals, arguments);
 			for (int j = 0; j < 8; j++) zvm_assert(DO[j] == 0);
+
+			*RE = 0;
+			*WE = 0;
+			zvm_run(retvals, arguments);
+			for (int j = 0; j < 8; j++) zvm_assert(DO[j] == 0);
 		}
 	}
 
