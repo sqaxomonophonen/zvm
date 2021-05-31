@@ -2556,7 +2556,7 @@ static void disasm_function_id(int function_id)
 		printf(" // type=eqvop\n");
 		// TODO
 	} else if (fn->flags & FN_LUT) {
-		printf(" // type=lut\n");
+		printf(" // type=lut range %.6x - %.6x\n", fn->bytecode_i, bytecode_end-1);
 		// TODO
 	} else {
 		printf(" // type=bytecode range %.6x - %.6x\n", fn->bytecode_i, bytecode_end-1);
