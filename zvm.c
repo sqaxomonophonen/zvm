@@ -525,11 +525,11 @@ static void exec_a21(int aop, uint32_t dst_reg, uint32_t src0_reg, uint32_t src1
 	reg_write(dst_reg, !!r);
 }
 
-static void lut_exec(uint32_t pc, int regbase, int stbase)
+static void lut_exec(uint32_t pc, int regoffset, int stoffset)
 {
 	uint32_t* p = &g.bytecode[pc];
 
-	const int is_stateful = stbase >= 0;
+	const int is_stateful = stoffset >= 0;
 
 	int n_state = 0;
 	if (is_stateful) {
@@ -545,7 +545,7 @@ static void lut_exec(uint32_t pc, int regbase, int stbase)
 	printf("LUT ");
 	#endif
 	for (int i = 0; i < n_state; i++) {
-		int v = st_read(stbase + i);
+		int v = st_read(stoffset + i);
 		if (v) lut_index |= 1 << ii;
 		ii++;
 		#ifdef LUT_DEBUG
@@ -556,7 +556,7 @@ static void lut_exec(uint32_t pc, int regbase, int stbase)
 	printf(":");
 	#endif
 	for (int i = 0; i < n_arguments; i++) {
-		int v = reg_read(regbase + n_retvals + i);
+		int v = reg_read(regoffset + n_retvals + i);
 		if (v) lut_index |= 1 << ii;
 		ii++;
 		#ifdef LUT_DEBUG
@@ -571,7 +571,7 @@ static void lut_exec(uint32_t pc, int regbase, int stbase)
 	int lut_cursor = lut_index * (n_state + n_retvals);
 	for (int i = 0; i < n_state; i++) {
 		int v = bs32_test(p, lut_cursor++);
-		st_write(stbase + i, v);
+		st_write(stoffset + i, v);
 		#ifdef LUT_DEBUG
 		printf("%d",v);
 		#endif
@@ -581,7 +581,7 @@ static void lut_exec(uint32_t pc, int regbase, int stbase)
 	#endif
 	for (int i = 0; i < n_retvals; i++) {
 		int v = bs32_test(p, lut_cursor++);
-		reg_write(regbase + i, v);
+		reg_write(regoffset + i, v);
 		#ifdef LUT_DEBUG
 		printf("%d",v);
 		#endif
@@ -633,10 +633,10 @@ static void machine_run(uint32_t pc0)
 			mpush(next_pc, mtop()->reg0 + arg[1], mtop()->state_offset);
 			break;
 		case OP(STATEFUL_LUT):
-			lut_exec(arg[0], mtop()->reg0 + arg[1], mtop()->state_offset + arg[2]);
+			lut_exec(arg[0], arg[1], arg[2]);
 			break;;
 		case OP(STATELESS_LUT):
-			lut_exec(arg[0], mtop()->reg0 + arg[1], -1);
+			lut_exec(arg[0], arg[1], -1);
 			break;
 		case OP(RETURN):
 			if (mpop() >= 0) {
