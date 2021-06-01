@@ -2611,6 +2611,10 @@ void zvm_end_program(uint32_t main_module_id)
 	// to find inspiration, maybe
 
 	#ifdef VERBOSE_DEBUG
+	disasm();
+	#endif
+
+	#ifdef VERBOSE_DEBUG
 	printf("=======================================\n");
 	const int n_substances = zvm_arrlen(g.substances);
 	printf("n_substances: %d\n", n_substances);
@@ -2632,10 +2636,6 @@ void zvm_end_program(uint32_t main_module_id)
 	printf("input sz:        %d\n", buftop());
 	printf("bytecode sz:     %d\n", zvm_arrlen(g.bytecode));
 	printf("=======================================\n");
-	#endif
-
-	#ifdef VERBOSE_DEBUG
-	disasm();
 	#endif
 
 	machine_mem_clear();
