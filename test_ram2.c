@@ -68,11 +68,12 @@ static struct zvm_pi op_not(struct zvm_pi x0)
 
 static uint32_t emit_memory_bit()
 {
-	zvm_begin_module(2, 1);
-	const struct zvm_pi WE = zvm_op_input(0);
-	const struct zvm_pi IN = zvm_op_input(1);
+	zvm_begin_module(3, 1);
+	const struct zvm_pi RE = zvm_op_input(0);
+	const struct zvm_pi WE = zvm_op_input(1);
+	const struct zvm_pi IN = zvm_op_input(2);
 	struct zvm_pi dly = zvm_op_unit_delay(ZVM_PI_PLACEHOLDER);
-	zvm_op_output(0, dly);
+	zvm_op_output(0, op_and(RE, dly));
 	zvm_assign_arg(dly.p, 0, op_or(op_and(op_not(WE), dly), op_and(WE, IN)));
 	return zvm_end_module();
 }
@@ -85,9 +86,10 @@ static uint32_t emit_memory_word(int word_size)
 	for (int i = 0; i < word_size; i++) {
 		struct zvm_pi in = zvm_op_input(2+i);
 		struct zvm_pi bit = zvm_pii(zvm_op_instance(module_id_memory_bit), 0);
+		zvm_arg(RE);
 		zvm_arg(WE);
 		zvm_arg(in);
-		zvm_op_output(i, op_and(RE, bit));
+		zvm_op_output(i, bit);
 	}
 	return zvm_end_module();
 }
